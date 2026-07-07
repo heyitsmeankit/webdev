@@ -964,9 +964,24 @@ function renderDevices() {
     const activeToday = _isActiveToday(d.lastActivity);
 
     // SIM rendering: if has clean number → paanel link, else → editable field
-    function simCell(simRaw, simClean, simOverride, slot, deviceId) {
+    function simCell(simRaw, simClean, simOverride, slot, deviceId, enriched) {
       const override = simOverride || '';
       const effective = override || simClean;
+      
+      // Build enrichment HTML if available
+      let enrichmentHtml = '';
+      if (enriched && enriched.length > 0) {
+        enrichmentHtml = '<div class="enriched-info">';
+        enriched.forEach(record => {
+          if (record && record.NAME && record.ID) {
+            const safeName = escapeHtml(record.NAME);
+            const safeId = escapeHtml(record.ID);
+            enrichmentHtml += `<div><span>${safeName}</span> <span>${safeId}</span></div>`;
+          }
+        });
+        enrichmentHtml += '</div>';
+      }
+      
       if (effective) {
         // Display: show override value as-is (may be a name or number), or simRaw
         const display = override || simRaw;
@@ -976,7 +991,7 @@ function renderDevices() {
             : `<span>${display}</span>`
           }
           <button class="sim-edit-btn" title="Edit" onclick="startSimEdit(event,'${deviceId}','${slot}',this)">✏️</button>
-        </div>`;
+        </div>${enrichmentHtml}`;
       }
       // No number — show editable placeholder
       return `<div class="sim-edit-wrap" id="sim-wrap-${deviceId}-${slot}">
@@ -985,8 +1000,8 @@ function renderDevices() {
       </div>`;
     }
 
-    const sim1Html = simCell(d.sim1, d.sim1Clean, d.sim1Override, 'sim1', d.deviceId);
-    const sim2Html = simCell(d.sim2, d.sim2Clean, d.sim2Override, 'sim2', d.deviceId);
+    const sim1Html = simCell(d.sim1, d.sim1Clean, d.sim1Override, 'sim1', d.deviceId, d.sim1_enriched);
+    const sim2Html = simCell(d.sim2, d.sim2Clean, d.sim2Override, 'sim2', d.deviceId, d.sim2_enriched);
 
     const kwHtml = d.juicyKeywords.length
       ? `<div style="display:flex;align-items:flex-start;gap:4px;flex-wrap:wrap">
@@ -1579,6 +1594,17 @@ function _esc(str) {
   return String(str)
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
     .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+/**
+ * HTML escaping utility using DOM method
+ * Prevents XSS from enrichment data containing special characters
+ * Requirements: 6.5
+ */
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
 }
 function _showFieldError(id, msg) {
   const el = document.getElementById(id);

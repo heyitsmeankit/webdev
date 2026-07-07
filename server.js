@@ -15,6 +15,7 @@ const DB_FILE          = path.join(DATA_DIR, 'dashboard_db.json');
 const SIM_FILE         = path.join(DATA_DIR, 'sim_overrides.json');
 const NOTES_FILE       = path.join(DATA_DIR, 'device_notes.json');
 const AADHAR_FILE      = path.join(DATA_DIR, 'aadhar.json');
+const PAANEL_CACHE_FILE = path.join(DATA_DIR, 'paanel_cache.json');
 
 // Poll interval: how often the background poller refreshes each target (ms)
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -81,6 +82,9 @@ const ALL_TARGETS = [...TARGETS];  // Only malware analysis databases
 // deviceRecord mirrors DA1.py fields exactly.
 let dashboardDb = { new: {}, old: {} };
 
+// ── Paanel Cache: in-memory storage for SIM enrichment data ───────────────────
+let paanelCache = {};
+
 function loadDashboardDb() {
   try {
     if (fs.existsSync(DB_FILE)) dashboardDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
@@ -100,6 +104,58 @@ function saveDashboardDb() {
   } catch (e) {
     console.error('DB save error:', e.message);
   }
+}
+
+function loadPaanelCache() {
+  try {
+    if (fs.existsSync(PAANEL_CACHE_FILE)) {
+      paanelCache = JSON.parse(fs.readFileSync(PAANEL_CACHE_FILE, 'utf8'));
+    }
+  } catch (e) {
+    console.error('[Paanel Cache] Load error:', e.message);
+    paanelCache = {};
+  }
+}
+
+function savePaanelCache() {
+  try {
+    fs.writeFileSync(PAANEL_CACHE_FILE, JSON.stringify(paanelCache, null, 2));
+  } catch (e) {
+    console.error('[Paanel Cache] Save error:', e.message);
+  }
+}
+
+// ── SIM Extraction & Validation ───────────────────────────────────────────────
+/**
+ * Extract and validate a 10-digit SIM number from a string field.
+ * 
+ * @param {*} simField - The input field (expected to be a string with a phone number)
+ * @returns {string|null} - A validated 10-digit numeric string, or null if invalid
+ * 
+ * Validates: Requirements 1.1, 1.2
+ * - Checks input is non-null, non-undefined string type
+ * - Removes all non-numeric characters using regex /\D/g
+ * - Validates cleaned string is exactly 10 digits long
+ * - Rejects values containing "n/a" or "unknown" (case-insensitive)
+ * - Returns validated 10-digit string or null for invalid inputs
+ */
+function extractValidSim(simField) {
+  // Validate input is non-null, non-undefined string type
+  if (!simField || typeof simField !== 'string') return null;
+  
+  // Reject values containing "n/a" or "unknown" (case-insensitive) BEFORE cleaning
+  // This prevents false positives like "unknown123456789" from becoming valid
+  const lowerField = simField.toLowerCase();
+  if (lowerField.includes('n/a') || lowerField.includes('unknown')) return null;
+  
+  // Remove all non-numeric characters using regex /\D/g
+  const cleaned = simField.replace(/\D/g, '');
+  
+  // Check if cleaned string is exactly 10 digits long
+  if (cleaned.length !== 10) return null;
+  
+  // Return validated 10-digit string
+  return cleaned;
 }
 
 function getTargetDb(target) {
@@ -1760,6 +1816,7 @@ app.get('*', (_, res) => res.sendFile(path.join(__dirname, 'public', 'index.html
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 loadDashboardDb();
+loadPaanelCache();
 loadAlertStore();
 // Sync subscribers for all bots at startup
 syncAllBotSubscribers();

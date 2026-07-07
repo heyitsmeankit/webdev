@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Test escapeHtml Function - Task 8</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      max-width: 900px;
+      margin: 40px auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    h1 {
+      color: #333;
+      border-bottom: 3px solid #5e72eb;
+      padding-bottom: 10px;
+    }
+    .test-case {
+      background: white;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      padding: 15px;
+      margin: 15px 0;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .test-case.pass {
+      border-left: 5px solid #22c55e;
+    }
+    .test-case.fail {
+      border-left: 5px solid #ef4444;
+    }
+    .test-name {
+      font-weight: bold;
+      font-size: 1.1em;
+      margin-bottom: 8px;
+    }
+    .test-detail {
+      font-family: 'Courier New', monospace;
+      background: #f8f8f8;
+      padding: 8px;
+      margin: 5px 0;
+      border-radius: 4px;
+      font-size: 0.9em;
+      word-break: break-all;
+    }
+    .label {
+      color: #666;
+      font-weight: bold;
+      display: inline-block;
+      width: 80px;
+    }
+    .pass-icon {
+      color: #22c55e;
+      font-size: 1.2em;
+      font-weight: bold;
+    }
+    .fail-icon {
+      color: #ef4444;
+      font-size: 1.2em;
+      font-weight: bold;
+    }
+    .summary {
+      background: #333;
+      color: white;
+      padding: 20px;
+      border-radius: 8px;
+      margin-top: 30px;
+      text-align: center;
+      font-size: 1.2em;
+    }
+    .summary .passed {
+      color: #22c55e;
+      font-weight: bold;
+    }
+    .summary .failed {
+      color: #ef4444;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <h1>🧪 Test: escapeHtml Function (Task 8)</h1>
+  <p><strong>Requirements:</strong> 6.5 - HTML escaping utility prevents XSS from enrichment data</p>
+  
+  <div id="test-results"></div>
+  <div id="summary" class="summary"></div>
+
+  <script>
+    /**
+     * HTML escaping utility using DOM method
+     * Prevents XSS from enrichment data containing special characters
+     * Requirements: 6.5
+     */
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    // Test cases
+    const testCases = [
+      {
+        name: 'Plain text (no special characters)',
+        input: 'Rajesh Kumar',
+        expected: 'Rajesh Kumar'
+      },
+      {
+        name: 'Text with < and > (script tag attempt)',
+        input: '<script>alert("xss")</script>',
+        expected: '&lt;script&gt;alert("xss")&lt;/script&gt;'
+      },
+      {
+        name: 'Text with quotes',
+        input: 'Name with "quotes" and \'apostrophes\'',
+        expected: 'Name with "quotes" and \'apostrophes\''
+      },
+      {
+        name: 'Text with ampersand',
+        input: 'Company & Associates',
+        expected: 'Company &amp; Associates'
+      },
+      {
+        name: 'ID with special characters',
+        input: '123456789012<script>',
+        expected: '123456789012&lt;script&gt;'
+      },
+      {
+        name: 'Empty string',
+        input: '',
+        expected: ''
+      },
+      {
+        name: 'XSS attempt with img tag',
+        input: '<img src=x onerror=alert(1)>',
+        expected: '&lt;img src=x onerror=alert(1)&gt;'
+      },
+      {
+        name: 'Mixed content with bold tag',
+        input: 'Normal text <b>bold</b> & more',
+        expected: 'Normal text &lt;b&gt;bold&lt;/b&gt; &amp; more'
+      },
+      {
+        name: 'Nested tags',
+        input: '<div><span>nested</span></div>',
+        expected: '&lt;div&gt;&lt;span&gt;nested&lt;/span&gt;&lt;/div&gt;'
+      },
+      {
+        name: 'Special HTML entities',
+        input: '< > & " \' test',
+        expected: '&lt; &gt; &amp; " \' test'
+      }
+    ];
+
+    // Run tests
+    let passed = 0;
+    let failed = 0;
+    const resultsDiv = document.getElementById('test-results');
+
+    testCases.forEach((test, index) => {
+      const result = escapeHtml(test.input);
+      const success = result === test.expected;
+      
+      if (success) {
+        passed++;
+      } else {
+        failed++;
+      }
+
+      const testDiv = document.createElement('div');
+      testDiv.className = `test-case ${success ? 'pass' : 'fail'}`;
+      testDiv.innerHTML = `
+        <div class="test-name">
+          <span class="${success ? 'pass-icon' : 'fail-icon'}">${success ? '✓' : '✗'}</span>
+          Test ${index + 1}: ${test.name}
+        </div>
+        <div class="test-detail">
+          <span class="label">Input:</span> "${test.input}"
+        </div>
+        <div class="test-detail">
+          <span class="label">Expected:</span> "${test.expected}"
+        </div>
+        <div class="test-detail">
+          <span class="label">Got:</span> "${result}"
+        </div>
+        ${success ? '<div style="color: #22c55e; margin-top: 8px;">✓ Test passed</div>' : '<div style="color: #ef4444; margin-top: 8px;">✗ Test failed - output mismatch</div>'}
+      `;
+      resultsDiv.appendChild(testDiv);
+    });
+
+    // Display summary
+    const summaryDiv = document.getElementById('summary');
+    summaryDiv.innerHTML = `
+      Test Results: 
+      <span class="passed">${passed} passed</span>, 
+      <span class="failed">${failed} failed</span> 
+      out of ${testCases.length} tests
+      <br><br>
+      ${failed === 0 ? '🎉 All tests passed! The escapeHtml function is working correctly.' : '⚠️ Some tests failed. Please review the implementation.'}
+    `;
+
+    // Console output
+    console.log('='.repeat(50));
+    console.log('escapeHtml Function Test Results');
+    console.log('='.repeat(50));
+    console.log(`Passed: ${passed}/${testCases.length}`);
+    console.log(`Failed: ${failed}/${testCases.length}`);
+    console.log('='.repeat(50));
+  </script>
+</body>
+</html>
