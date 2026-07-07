@@ -693,7 +693,19 @@ function extract10Digits(raw) {
 }
 
 function getSmsLink(target, deviceId, objId) {
-  const { url, schema } = target;
+  const { url, schema, id } = target;
+  
+  // Special cases for specific malware databases
+  if (id === 2) {
+    // DB2 (sirelech1): SMS in /user_sms/<deviceId>
+    return `${url}/user_sms/${deviceId}.json?print=pretty`;
+  }
+  if (id === 4) {
+    // DB4 (gggggg): SMS in /<deviceId>/sms
+    return `${url}/${deviceId}/sms.json?print=pretty`;
+  }
+  
+  // Standard schema-based routing
   if (schema === 1)    return `${url}/All_Users/sms/${deviceId}.json?print=pretty`;
   if (schema === 4)    return `${url}/clients/${deviceId}/messages.json?print=pretty`;
   if (schema === 16)   return `${url}/data/${deviceId}/messages.json?print=pretty`;
