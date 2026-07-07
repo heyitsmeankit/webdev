@@ -55,14 +55,12 @@ const RAW_TARGETS = [
 ];
 
 // ── Schema assignment for malware databases ───────────────────────────────────
-// Schema 1: Standard All_Users.json endpoint (colana-84ce2, gggggg-979bd)
-// Schema 2: clients + /messages/<did> (sirelech1, vish-4a6de)
-const SCHEMA_1 = new Set([1, 4]);  // colana-84ce2, gggggg-979bd
-const SCHEMA_2 = new Set([2, 3]);  // sirelech1, vish-4a6de
+// ALL 4 databases use Schema 2: clients.json endpoint with inline messages
+// Schema 2: clients + inline messages at clients[did].messages
+const SCHEMA_2 = new Set([1, 2, 3, 4]);  // ALL malware databases use /clients.json
 
 function getSchema(id) {
-  if (SCHEMA_2.has(id)) return 2;
-  return 1;  // Default to schema 1
+  return 2;  // All malware databases use schema 2
 }
 
 const TARGETS = RAW_TARGETS.map(([id, url]) => ({

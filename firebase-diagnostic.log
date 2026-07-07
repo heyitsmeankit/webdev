@@ -1,0 +1,96 @@
+
+🚀 Firebase Database Diagnostic Tool
+   Testing 4 malware databases...
+
+
+================================================================================
+🔍 Target 1: https://colana-84ce2-default-rtdb.firebaseio.com
+   APK: my hr5.apk | Expected Schema: 1
+================================================================================
+📡 Fetching: https://colana-84ce2-default-rtdb.firebaseio.com/All_Users.json
+❌ No data returned
+
+================================================================================
+🔍 Target 2: https://sirelech1-default-rtdb.firebaseio.com
+   APK: hr1.apk | Expected Schema: 2
+================================================================================
+📡 Fetching: https://sirelech1-default-rtdb.firebaseio.com/clients.json
+✅ Connected successfully
+
+📊 Root Keys (2):
+   - 0093386cce8cb1dd: object (3 items)
+   - 7f2df91298e728e1: object (3 items)
+
+👥 Devices Found: 6
+   Sample device IDs:
+   - autoBalance
+   - autoCcLimit
+   - banks
+   - autoBalance
+   - autoCcLimit
+   ... and 1 more
+
+💬 Approximate SMS Count: 0
+
+🔎 Schema Indicators:
+
+📱 Sample Device Details:
+
+✅ SUMMARY:
+   Status: Reachable
+   Devices: 6
+   Messages: ~0
+   Root Keys: 2
+
+================================================================================
+🔍 Target 3: https://vish-4a6de-default-rtdb.firebaseio.com
+   APK: hr2.apk | Expected Schema: 2
+================================================================================
+📡 Fetching: https://vish-4a6de-default-rtdb.firebaseio.com/clients.json
+✅ Connected successfully
+
+📊 Root Keys (170):
+   - 0061dea35d29a0f7: object (21 items)
+   - 03114ec45b16e23a: object (20 items)
+   - 070c71b032e1796e: object (21 items)
+   - 088d38ee1ec6a827: object (21 items)
+   - 0ae84fff21ca01f4: object (20 items)
+   - 0c6d96108f5799cc: object (5 items)
+   - 137c1b40e878e26b: object (20 items)
+   - 13ed9de0bc2b20f0: object (21 items)
+   - 166bc97e4191ca09: object (22 items)
+   - 17a652ea72d0b09a: object (20 items)
+   ... and 160 more
+
+👥 Devices Found: 3163
+   Sample device IDs:
+   - androidV
+   - autoBalance
+   - autoCcLimit
+   - banks
+   - battery
+   ... and 3158 more
+
+💬 Approximate SMS Count: 0
+
+🔎 Schema Indicators:
+
+📱 Sample Device Details:
+
+✅ SUMMARY:
+   Status: Reachable
+   Devices: 3163
+   Messages: ~0
+   Root Keys: 170
+
+================================================================================
+🔍 Target 4: https://gggggg-979bd-default-rtdb.firebaseio.com
+   APK: hr3.apk | Expected Schema: 1
+================================================================================
+📡 Fetching: https://gggggg-979bd-default-rtdb.firebaseio.com/All_Users.json
+❌ No data returned
+
+================================================================================
+✅ Diagnostic complete!
+================================================================================
+
