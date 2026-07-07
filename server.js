@@ -158,6 +158,9 @@ function extractValidSim(simField) {
   return cleaned;
 }
 
+// ── Paanel API Rate Limit Tracking ────────────────────────────────────────────
+let paanelRateLimitUntil = 0;  // Timestamp when rate limit cooldown expires
+
 /**
  * Fetch SIM owner enrichment data from Paanel API
  * @param {string} simNumber - Validated 10-digit SIM number
@@ -166,7 +169,8 @@ function extractValidSim(simField) {
  * Validates: Requirements 1.3, 1.4, 1.5, 6.1, 6.2, 6.3, 6.4
  * - Constructs URL with format: https://api.paanel.shop/api/gateway.php?key=Jack&number={10digit}
  * - Uses 10-second timeout via AbortSignal.timeout(10000)
- * - Sets User-Agent header to "Mozilla/5.0"
+ * - Enhanced browser-like headers for better compatibility
+ * - Smart rate limit detection: distinguishes "no data found" from rate limits
  * - Parses JSON response and extracts data array
  * - Handles both {status: "success", data: [...]} and direct array responses
  * - Filters records to ensure NAME and ID fields exist
@@ -174,12 +178,31 @@ function extractValidSim(simField) {
  * - Logs all errors with format: [Paanel API Error] {simNumber}: {errorMessage}
  */
 async function fetchPaanelEnrichment(simNumber) {
+  // Check if we're in rate limit cooldown
+  if (Date.now() < paanelRateLimitUntil) {
+    const remainingSec = Math.ceil((paanelRateLimitUntil - Date.now()) / 1000);
+    console.log(`[Paanel API] Rate limit active, skipping ${simNumber} (${remainingSec}s remaining)`);
+    return [];
+  }
+
   const url = `https://api.paanel.shop/api/gateway.php?key=Jack&number=${simNumber}`;
   
   try {
     const response = await fetch(url, {
       method: 'GET',
-      headers: { 'User-Agent': 'Mozilla/5.0' },
+      headers: {
+        // Enhanced browser-like headers for better compatibility
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Referer': 'https://api.paanel.shop/',
+        'Origin': 'https://api.paanel.shop',
+        'Connection': 'keep-alive',
+        'Sec-Fetch-Dest': 'empty',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Site': 'same-origin'
+      },
       signal: AbortSignal.timeout(10000) // 10 second timeout
     });
     
@@ -189,7 +212,16 @@ async function fetchPaanelEnrichment(simNumber) {
     
     const data = await response.json();
     
-    // Handle different response formats
+    // Smart rate limit detection
+    // Legitimate "no data found" has: {status: "error", message: "no data found"}
+    // Rate limits return unexpected/empty responses without this specific error
+    if (data.status === 'error' && data.message && data.message.toLowerCase().includes('no data found')) {
+      // This is legitimate - no data exists for this number
+      console.log(`[Paanel API] No data found for ${simNumber} (legitimate empty result)`);
+      return [];  // Cache this as empty result
+    }
+    
+    // Handle success response with data array
     if (data.status === 'success' && Array.isArray(data.data)) {
       return data.data.filter(record => 
         record && typeof record === 'object' && record.NAME && record.ID
@@ -203,7 +235,11 @@ async function fetchPaanelEnrichment(simNumber) {
       );
     }
     
+    // Unexpected response format - likely rate limited
+    console.warn(`[Paanel API] Unexpected response format for ${simNumber}, activating 45s cooldown`);
+    paanelRateLimitUntil = Date.now() + 45000;  // 45 second cooldown
     return [];
+    
   } catch (error) {
     console.error(`[Paanel API Error] ${simNumber}:`, error.message);
     return [];
