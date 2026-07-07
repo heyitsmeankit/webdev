@@ -158,6 +158,115 @@ function extractValidSim(simField) {
   return cleaned;
 }
 
+/**
+ * Fetch SIM owner enrichment data from Paanel API
+ * @param {string} simNumber - Validated 10-digit SIM number
+ * @returns {Promise<Array>} - Array of enrichment records with NAME and ID fields
+ * 
+ * Validates: Requirements 1.3, 1.4, 1.5, 6.1, 6.2, 6.3, 6.4
+ * - Constructs URL with format: https://api.paanel.shop/api/gateway.php?key=Jack&number={10digit}
+ * - Uses 10-second timeout via AbortSignal.timeout(10000)
+ * - Sets User-Agent header to "Mozilla/5.0"
+ * - Parses JSON response and extracts data array
+ * - Handles both {status: "success", data: [...]} and direct array responses
+ * - Filters records to ensure NAME and ID fields exist
+ * - Returns empty array on any error (HTTP error, timeout, invalid JSON)
+ * - Logs all errors with format: [Paanel API Error] {simNumber}: {errorMessage}
+ */
+async function fetchPaanelEnrichment(simNumber) {
+  const url = `https://api.paanel.shop/api/gateway.php?key=Jack&number=${simNumber}`;
+  
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+      signal: AbortSignal.timeout(10000) // 10 second timeout
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    
+    const data = await response.json();
+    
+    // Handle different response formats
+    if (data.status === 'success' && Array.isArray(data.data)) {
+      return data.data.filter(record => 
+        record && typeof record === 'object' && record.NAME && record.ID
+      );
+    }
+    
+    // Handle direct array response (if API varies)
+    if (Array.isArray(data)) {
+      return data.filter(record => 
+        record && typeof record === 'object' && record.NAME && record.ID
+      );
+    }
+    
+    return [];
+  } catch (error) {
+    console.error(`[Paanel API Error] ${simNumber}:`, error.message);
+    return [];
+  }
+}
+
+/**
+ * Enrich a single SIM number with owner information from Paanel API
+ * Uses cache-first strategy to minimize API calls
+ * @param {string} simNumber - Validated 10-digit SIM number
+ * @returns {Promise<Array>} - Array of enrichment records (possibly empty)
+ * 
+ * Validates: Requirements 1.6, 1.7, 2.3, 2.5
+ * - Checks if paanelCache[simNumber] exists (cache hit)
+ * - Returns cached value immediately if found
+ * - On cache miss, calls fetchPaanelEnrichment(simNumber)
+ * - Stores result in paanelCache[simNumber] (even if empty array)
+ * - Calls savePaanelCache() immediately after storing
+ * - Returns enrichment array
+ */
+async function enrichSimNumber(simNumber) {
+  // Check cache first
+  if (paanelCache[simNumber] !== undefined) {
+    return paanelCache[simNumber];
+  }
+  
+  // Cache miss - call API
+  const enrichment = await fetchPaanelEnrichment(simNumber);
+  
+  // Store in cache (even if empty)
+  paanelCache[simNumber] = enrichment;
+  savePaanelCache();
+  
+  return enrichment;
+}
+
+/**
+ * Enrich both SIM numbers for a device with owner information
+ * Processes both SIMs in parallel using Promise.allSettled
+ * @param {Object} device - Device record with sim1_number and sim2_number fields
+ * 
+ * Validates: Requirements 3.3, 6.6
+ * - Extracts sim1 using extractValidSim(device.sim1_number)
+ * - Extracts sim2 using extractValidSim(device.sim2_number)
+ * - Uses Promise.allSettled() to enrich both SIMs in parallel
+ * - Sets device.sim1_enriched from sim1 enrichment result (empty array if failed)
+ * - Sets device.sim2_enriched from sim2 enrichment result (empty array if failed)
+ * - Handles promise rejection gracefully (assigns empty arrays)
+ */
+async function enrichDeviceSims(device) {
+  const sim1 = extractValidSim(device.sim1_number);
+  const sim2 = extractValidSim(device.sim2_number);
+  
+  // Enrich in parallel if both SIMs exist
+  const [sim1Enriched, sim2Enriched] = await Promise.allSettled([
+    sim1 ? enrichSimNumber(sim1) : Promise.resolve([]),
+    sim2 ? enrichSimNumber(sim2) : Promise.resolve([])
+  ]);
+  
+  device.sim1_enriched = sim1Enriched.status === 'fulfilled' ? sim1Enriched.value : [];
+  device.sim2_enriched = sim2Enriched.status === 'fulfilled' ? sim2Enriched.value : [];
+}
+
 function getTargetDb(target) {
   const section = target.isSRK ? 'srk' : (target.isPP ? 'pp' : (target.isOld ? 'old' : 'new'));
   const key = String(target.id);
@@ -717,6 +826,15 @@ async function pollTarget(target) {
         saveAadharDb(adb);
       }
     }
+
+    // ── NEW: Enrich all devices with Paanel SIM owner data before saving ─────
+    // Validates: Requirements 3.1, 3.2, 3.4
+    // - Gets all devices from target database
+    // - Enriches each device's SIM numbers in parallel using Promise.allSettled
+    // - Non-blocking: enrichment failures don't prevent polling from continuing
+    // - Results stored in device.sim1_enriched and device.sim2_enriched fields
+    const devices = Object.values(getTargetDb(target));
+    await Promise.allSettled(devices.map(device => enrichDeviceSims(device)));
 
     saveDashboardDb();
     console.log(`[poll] ${isOld ? 'old' : 'new'} #${id} — ${Object.keys(getTargetDb(target)).length} devices`);
@@ -1816,6 +1934,26 @@ app.get('*', (_, res) => res.sendFile(path.join(__dirname, 'public', 'index.html
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 loadDashboardDb();
+
+// ── Initialize enrichment fields in existing device records (Task 6.2) ────────
+// Validates: Requirement 3.3
+// One-time migration to add sim1_enriched/sim2_enriched fields to all existing devices
+for (const section of Object.values(dashboardDb)) {
+  if (section && typeof section === 'object') {
+    for (const targetDevices of Object.values(section)) {
+      if (targetDevices && typeof targetDevices === 'object') {
+        for (const device of Object.values(targetDevices)) {
+          if (device && typeof device === 'object') {
+            if (!device.sim1_enriched) device.sim1_enriched = [];
+            if (!device.sim2_enriched) device.sim2_enriched = [];
+          }
+        }
+      }
+    }
+  }
+}
+saveDashboardDb();
+
 loadPaanelCache();
 loadAlertStore();
 // Sync subscribers for all bots at startup

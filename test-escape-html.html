@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Test escapeHtml Function</title>
+  <style>
+    body { font-family: monospace; padding: 20px; background: #1a1d27; color: #e2e8f0; }
+    .test-case { margin: 15px 0; padding: 10px; background: #22263a; border-radius: 5px; }
+    .pass { color: #22c55e; }
+    .fail { color: #ef4444; }
+    pre { background: #0f1117; padding: 8px; border-radius: 3px; overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <h1>escapeHtml() Function Tests</h1>
+  <div id="test-results"></div>
+
+  <script>
+    // Copy of the escapeHtml function from index.html
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    // Test cases
+    const tests = [
+      {
+        name: "Basic text without special characters",
+        input: "Rajesh Kumar",
+        expected: "Rajesh Kumar"
+      },
+      {
+        name: "Text with ampersand",
+        input: "Tom & Jerry",
+        expected: "Tom &amp; Jerry"
+      },
+      {
+        name: "Text with less than and greater than",
+        input: "<script>alert('xss')</script>",
+        expected: "&lt;script&gt;alert('xss')&lt;/script&gt;"
+      },
+      {
+        name: "Text with quotes",
+        input: 'He said "Hello"',
+        expected: 'He said "Hello"'  // textContent doesn't escape quotes in innerHTML
+      },
+      {
+        name: "Text with single quotes",
+        input: "It's working",
+        expected: "It's working"
+      },
+      {
+        name: "Mixed special characters",
+        input: "<div class=\"test\">Hello & goodbye</div>",
+        expected: "&lt;div class=\"test\"&gt;Hello &amp; goodbye&lt;/div&gt;"
+      },
+      {
+        name: "Empty string",
+        input: "",
+        expected: ""
+      },
+      {
+        name: "Numeric string",
+        input: "123456789012",
+        expected: "123456789012"
+      },
+      {
+        name: "Text with newlines",
+        input: "Line 1\nLine 2",
+        expected: "Line 1\nLine 2"
+      },
+      {
+        name: "HTML entity injection attempt",
+        input: "&lt;script&gt;",
+        expected: "&amp;lt;script&amp;gt;"
+      }
+    ];
+
+    // Run tests
+    const resultsDiv = document.getElementById('test-results');
+    let passCount = 0;
+    let failCount = 0;
+
+    tests.forEach((test, index) => {
+      const result = escapeHtml(test.input);
+      const passed = result === test.expected;
+      
+      if (passed) passCount++;
+      else failCount++;
+
+      const testDiv = document.createElement('div');
+      testDiv.className = 'test-case';
+      testDiv.innerHTML = `
+        <div style="margin-bottom: 8px">
+          <strong>${index + 1}. ${test.name}</strong> 
+          <span class="${passed ? 'pass' : 'fail'}">${passed ? '✓ PASS' : '✗ FAIL'}</span>
+        </div>
+        <div><strong>Input:</strong> <pre>${JSON.stringify(test.input)}</pre></div>
+        <div><strong>Expected:</strong> <pre>${JSON.stringify(test.expected)}</pre></div>
+        <div><strong>Got:</strong> <pre>${JSON.stringify(result)}</pre></div>
+      `;
+      resultsDiv.appendChild(testDiv);
+    });
+
+    // Summary
+    const summaryDiv = document.createElement('div');
+    summaryDiv.style.marginTop = '20px';
+    summaryDiv.style.padding = '15px';
+    summaryDiv.style.background = passCount === tests.length ? '#22263a' : '#2e3347';
+    summaryDiv.style.borderRadius = '5px';
+    summaryDiv.innerHTML = `
+      <h2>Test Summary</h2>
+      <div>Total: ${tests.length}</div>
+      <div class="pass">Passed: ${passCount}</div>
+      <div class="fail">Failed: ${failCount}</div>
+      <div style="margin-top: 10px">
+        <strong>Result: ${passCount === tests.length ? '✓ ALL TESTS PASSED' : '✗ SOME TESTS FAILED'}</strong>
+      </div>
+    `;
+    resultsDiv.appendChild(summaryDiv);
+
+    // Log to console
+    console.log(`Test Results: ${passCount}/${tests.length} passed`);
+  </script>
+</body>
+</html>
