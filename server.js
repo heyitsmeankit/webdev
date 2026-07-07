@@ -160,6 +160,8 @@ function extractValidSim(simField) {
 
 // ── Paanel API Rate Limit Tracking ────────────────────────────────────────────
 let paanelRateLimitUntil = 0;  // Timestamp when rate limit cooldown expires
+let paanelLastRequestTime = 0; // Track last API request time for throttling
+const PAANEL_REQUEST_DELAY = 500; // Minimum 500ms delay between API requests
 
 /**
  * Fetch SIM owner enrichment data from Paanel API
@@ -171,6 +173,7 @@ let paanelRateLimitUntil = 0;  // Timestamp when rate limit cooldown expires
  * - Uses 10-second timeout via AbortSignal.timeout(10000)
  * - Enhanced browser-like headers for better compatibility
  * - Smart rate limit detection: distinguishes "no data found" from rate limits
+ * - Request throttling: 500ms minimum delay between requests
  * - Parses JSON response and extracts data array
  * - Handles both {status: "success", data: [...]} and direct array responses
  * - Filters records to ensure NAME and ID fields exist
@@ -184,6 +187,15 @@ async function fetchPaanelEnrichment(simNumber) {
     console.log(`[Paanel API] Rate limit active, skipping ${simNumber} (${remainingSec}s remaining)`);
     return [];
   }
+
+  // Throttle requests: wait if last request was too recent
+  const timeSinceLastRequest = Date.now() - paanelLastRequestTime;
+  if (timeSinceLastRequest < PAANEL_REQUEST_DELAY) {
+    const waitTime = PAANEL_REQUEST_DELAY - timeSinceLastRequest;
+    await new Promise(resolve => setTimeout(resolve, waitTime));
+  }
+  
+  paanelLastRequestTime = Date.now();
 
   const url = `https://api.paanel.shop/api/gateway.php?key=Jack&number=${simNumber}`;
   
@@ -212,31 +224,38 @@ async function fetchPaanelEnrichment(simNumber) {
     
     const data = await response.json();
     
-    // Smart rate limit detection
-    // Legitimate "no data found" has: {status: "error", message: "no data found"}
-    // Rate limits return unexpected/empty responses without this specific error
-    if (data.status === 'error' && data.message && data.message.toLowerCase().includes('no data found')) {
+    // Smart rate limit detection - EXACT format check
+    // Legitimate "no data found" response format:
+    // {status: "error", message: "no data found", timestamp: "...", credit: {...}, contact: {...}}
+    if (data.status === 'error' && 
+        data.message && 
+        data.message.toLowerCase().trim() === 'no data found') {
       // This is legitimate - no data exists for this number
       console.log(`[Paanel API] No data found for ${simNumber} (legitimate empty result)`);
-      return [];  // Cache this as empty result
+      return [];  // Cache this as empty result - NO COOLDOWN
     }
     
     // Handle success response with data array
     if (data.status === 'success' && Array.isArray(data.data)) {
-      return data.data.filter(record => 
+      const filtered = data.data.filter(record => 
         record && typeof record === 'object' && record.NAME && record.ID
       );
+      console.log(`[Paanel API] Found ${filtered.length} record(s) for ${simNumber}`);
+      return filtered;
     }
     
     // Handle direct array response (if API varies)
     if (Array.isArray(data)) {
-      return data.filter(record => 
+      const filtered = data.filter(record => 
         record && typeof record === 'object' && record.NAME && record.ID
       );
+      console.log(`[Paanel API] Found ${filtered.length} record(s) for ${simNumber}`);
+      return filtered;
     }
     
     // Unexpected response format - likely rate limited
-    console.warn(`[Paanel API] Unexpected response format for ${simNumber}, activating 45s cooldown`);
+    console.warn(`[Paanel API] Rate limit detected for ${simNumber} - activating 45s cooldown`);
+    console.warn(`[Paanel API] Response: ${JSON.stringify(data).substring(0, 200)}`);
     paanelRateLimitUntil = Date.now() + 45000;  // 45 second cooldown
     return [];
     
