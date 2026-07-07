@@ -696,13 +696,9 @@ function getSmsLink(target, deviceId, objId) {
   const { url, schema, id } = target;
   
   // Special cases for specific malware databases
-  if (id === 2) {
-    // DB2 (sirelech1): SMS in /user_sms/<deviceId>
+  // Both DB2 and DB4 store received SMS in /user_sms/<deviceId>
+  if (id === 2 || id === 4) {
     return `${url}/user_sms/${deviceId}.json?print=pretty`;
-  }
-  if (id === 4) {
-    // DB4 (gggggg): SMS in /<deviceId>/sms
-    return `${url}/${deviceId}/sms.json?print=pretty`;
   }
   
   // Standard schema-based routing
