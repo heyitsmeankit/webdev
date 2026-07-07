@@ -247,7 +247,11 @@ function parseSms(dsms, schema) {
 // Schema 4: SMS is INLINE inside clients[did].messages — NO separate fetch
 const NEEDS_PER_DEVICE_SMS = new Set([2, 3, 5, 6]);
 
-function getSmsEndpoint(url, schema, did) {
+function getSmsEndpoint(target, did) {
+  const { url, schema, id } = target;
+  // Special cases for DB2 and DB4: use user_sms
+  if (id === 2 || id === 4) return `${url}/user_sms/${did}.json`;
+  // Standard schema routing
   if (schema === 2 || schema === 5) return `${url}/messages/${did}.json`;
   return `${url}/user_sms/${did}.json`;
 }
@@ -410,7 +414,7 @@ async function pollTarget(target) {
     if (NEEDS_PER_DEVICE_SMS.has(schema)) {
       const dids = Object.keys(rawDevs);
       const results = await Promise.allSettled(
-        dids.map(did => fbFetch(getSmsEndpoint(url, schema, did)).catch(() => null))
+        dids.map(did => fbFetch(getSmsEndpoint(target, did)).catch(() => null))
       );
       for (let i = 0; i < dids.length; i++) {
         const val = results[i].status === 'fulfilled' ? results[i].value : null;
