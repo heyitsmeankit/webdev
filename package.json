@@ -1,0 +1,14 @@
+{
+  "name": "device-monitor-dashboard",
+  "version": "1.0.0",
+  "description": "Web dashboard for Device Monitor Bot - mirrors DA1.py functionality",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}
