@@ -1,0 +1,68 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                MALWARE ANALYSIS DASHBOARD - QUICK DEPLOY                     ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+📦 ONE-COMMAND DEPLOYMENT ON FRESH UBUNTU:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+curl -fsSL https://raw.githubusercontent.com/heyitsmeankit/webdev/main/deploy.sh | sudo bash
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✅ What it does:
+   • Installs Node.js 18.x LTS
+   • Clones repository to /opt/malware-dashboard
+   • Installs all dependencies
+   • Creates systemd service
+   • Opens firewall port 3000
+   • Starts dashboard automatically
+
+🌐 Access after deployment:
+   http://YOUR_SERVER_IP:3000
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🎯 MONITORED MALWARE DATABASES:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+[1] colana-84ce2-default-rtdb.firebaseio.com     (my hr5.apk)
+[2] sirelech1-default-rtdb.firebaseio.com        (hr1.apk)
+[3] vish-4a6de-default-rtdb.firebaseio.com       (hr2.apk)
+[4] gggggg-979bd-default-rtdb.firebaseio.com     (hr3.apk)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+⚙️  SERVICE MANAGEMENT:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Status:    sudo systemctl status malware-dashboard.service
+Logs:      sudo journalctl -u malware-dashboard.service -f
+Restart:   sudo systemctl restart malware-dashboard.service
+Stop:      sudo systemctl stop malware-dashboard.service
+Start:     sudo systemctl start malware-dashboard.service
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📝 REQUIREMENTS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+• Ubuntu 20.04 LTS or newer
+• Root/sudo access
+• Internet connection
+• Port 3000 available
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🚀 ALTERNATIVE - Manual Clone & Deploy:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+git clone https://github.com/heyitsmeankit/webdev.git
+cd webdev
+sudo bash deploy.sh
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📖 Full documentation: See DEPLOYMENT.md in repository
+🔗 Repository: https://github.com/heyitsmeankit/webdev
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
