@@ -731,14 +731,37 @@ async function fetchPaanelEnrichment(simNumber) {
     paanelConsecutiveTimeouts = 0;
     
     if (!response.ok) {
-      // HTTP 502/503/429 errors - sleep for 60 seconds, don't cache, will retry later
-      if (response.status === 502 || response.status === 503 || response.status === 429) {
-        console.error(`[Paanel API Error] ${simNumber}: HTTP ${response.status} (sleeping 60s before retry)`);
-        // Set a longer rate limit cooldown for server errors
-        paanelRateLimitUntil = Date.now() + 60000;  // 60 seconds
-        return null; // Don't cache, retry after cooldown
+      // HTTP 502/503/429 errors - try to parse response body first (might have valid JSON)
+      let errorData = null;
+      try {
+        const errorText = await response.text();
+        if (errorText) {
+          try {
+            errorData = JSON.parse(errorText);
+            console.error(`[Paanel API Error] ${simNumber}: HTTP ${response.status} with JSON body: ${errorText.substring(0, 200)}`);
+          } catch {
+            console.error(`[Paanel API Error] ${simNumber}: HTTP ${response.status}, response: ${errorText.substring(0, 200)}`);
+          }
+        } else {
+          console.error(`[Paanel API Error] ${simNumber}: HTTP ${response.status} (no response body)`);
+        }
+      } catch (parseError) {
+        console.error(`[Paanel API Error] ${simNumber}: HTTP ${response.status}, could not parse response`);
       }
-      throw new Error(`HTTP ${response.status}`);
+      
+      // Check if response contains "no data found" even on 502/503
+      if (errorData && errorData.status === 'error' && 
+          errorData.message && 
+          errorData.message.toLowerCase().trim() === 'no data found') {
+        // This is legitimate - no data exists for this number, cache empty result
+        console.log(`[Paanel API] No data found for ${simNumber} (legitimate empty result, even on ${response.status})`);
+        return [];  // Cache this as empty result - NO COOLDOWN
+      }
+      
+      // Server error - sleep for 60 seconds, don't cache, will retry later
+      console.error(`[Paanel API Error] ${simNumber}: HTTP ${response.status} (sleeping 60s before retry)`);
+      paanelRateLimitUntil = Date.now() + 60000;  // 60 seconds
+      return null; // Don't cache, retry after cooldown
     }
     
     const data = await response.json();
