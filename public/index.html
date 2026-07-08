@@ -994,10 +994,13 @@ function renderDevices() {
       if (enriched && enriched.length > 0) {
         enrichmentHtml = '<div class="enriched-info">';
         enriched.forEach(record => {
-          if (record && record.NAME && record.ID) {
+          if (record && record.NAME) {
             const safeName = escapeHtml(record.NAME);
-            const safeId = escapeHtml(record.ID);
-            enrichmentHtml += `<div><span>${safeName}</span> <span>${safeId}</span></div>`;
+            // Handle both ID and id fields, and null/undefined values
+            const idValue = record.ID || record.id || '';
+            const safeId = idValue ? escapeHtml(String(idValue)) : '';
+            // Display name and ID (if available)
+            enrichmentHtml += `<div><span>${safeName}</span>${safeId ? ` <span>${safeId}</span>` : ''}</div>`;
           }
         });
         enrichmentHtml += '</div>';

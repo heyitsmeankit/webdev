@@ -256,7 +256,7 @@ async function fetchPaanelEnrichment(simNumber) {
     // Handle success response with data array
     if (data.status === 'success' && Array.isArray(data.data)) {
       const filtered = data.data.filter(record => 
-        record && typeof record === 'object' && record.NAME && record.ID
+        record && typeof record === 'object' && record.NAME
       );
       console.log(`[Paanel API] Found ${filtered.length} record(s) for ${simNumber}`);
       return filtered;
@@ -265,7 +265,7 @@ async function fetchPaanelEnrichment(simNumber) {
     // Handle direct array response (if API varies)
     if (Array.isArray(data)) {
       const filtered = data.filter(record => 
-        record && typeof record === 'object' && record.NAME && record.ID
+        record && typeof record === 'object' && record.NAME
       );
       console.log(`[Paanel API] Found ${filtered.length} record(s) for ${simNumber}`);
       return filtered;
