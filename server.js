@@ -11,6 +11,47 @@ const PORT = 3000;
 const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
+// ── TypeScript-style type definitions for Queue System ────────────────────────
+/**
+ * @typedef {'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED'} QueueStatus
+ */
+
+/**
+ * @typedef {Object} QueueItem
+ * @property {string} id - Unique identifier for the queue item
+ * @property {string} simNumber - Validated 10-digit SIM number
+ * @property {QueueStatus} status - Current processing status
+ * @property {number} attempts - Number of processing attempts (0-3)
+ * @property {string} addedAt - ISO timestamp when item was added to queue
+ * @property {string|null} startedAt - ISO timestamp when processing started
+ * @property {string|null} completedAt - ISO timestamp when processing completed
+ * @property {string|null} error - Last error message (if any)
+ */
+
+/**
+ * @typedef {Object} QueueState
+ * @property {QueueItem[]} items - Array of all queue items
+ * @property {boolean} isRunning - Whether the worker is currently running
+ * @property {number} lastSaved - Timestamp of last save to disk
+ * @property {QueueStats} stats - Queue processing statistics
+ */
+
+/**
+ * @typedef {Object} QueueStats
+ * @property {number} totalProcessed - Total items processed (completed + failed)
+ * @property {number} successCount - Items successfully completed
+ * @property {number} failureCount - Items that failed after max retries
+ * @property {string|null} lastProcessedAt - ISO timestamp of last processing
+ * @property {string} startedAt - ISO timestamp when worker started
+ * @property {number} apiCallsTotal - Total API calls made
+ * @property {number} cacheHitsTotal - Total cache hits
+ */
+
+// Queue configuration constants
+const MAX_RETRIES = 3;
+const WORKER_INTERVAL_MS = 3000;  // 3 seconds between API calls
+const QUEUE_FILE_V2 = path.join(DATA_DIR, 'paanel_queue.json');
+
 const DB_FILE          = path.join(DATA_DIR, 'dashboard_db.json');
 const SIM_FILE         = path.join(DATA_DIR, 'sim_overrides.json');
 const NOTES_FILE       = path.join(DATA_DIR, 'device_notes.json');
@@ -84,6 +125,462 @@ let dashboardDb = { new: {}, old: {} };
 
 // ── Paanel Cache: in-memory storage for SIM enrichment data ───────────────────
 let paanelCache = {};
+
+// ── SIM Enrichment Queue V2: TypeScript-based background batch processing ─────
+/** @type {QueueState} */
+let queueState = {
+  items: [],
+  isRunning: false,
+  lastSaved: Date.now(),
+  stats: {
+    totalProcessed: 0,
+    successCount: 0,
+    failureCount: 0,
+    lastProcessedAt: null,
+    startedAt: new Date().toISOString(),
+    apiCallsTotal: 0,
+    cacheHitsTotal: 0
+  }
+};
+
+/**
+ * Initialize queue state from disk or create empty state
+ * Resets any stuck PROCESSING items to PENDING on startup
+ * 
+ * Validates: Requirements 3.2, 3.3, 3.4
+ */
+function initializeQueue() {
+  try {
+    if (fs.existsSync(QUEUE_FILE_V2)) {
+      const data = JSON.parse(fs.readFileSync(QUEUE_FILE_V2, 'utf8'));
+      
+      // Load existing queue state
+      queueState = {
+        items: data.items || [],
+        isRunning: false, // Always start with worker stopped
+        lastSaved: Date.now(),
+        stats: {
+          totalProcessed: data.stats?.totalProcessed || 0,
+          successCount: data.stats?.successCount || 0,
+          failureCount: data.stats?.failureCount || 0,
+          lastProcessedAt: data.stats?.lastProcessedAt || null,
+          startedAt: data.stats?.startedAt || new Date().toISOString(),
+          apiCallsTotal: data.stats?.apiCallsTotal || 0,
+          cacheHitsTotal: data.stats?.cacheHitsTotal || 0
+        }
+      };
+      
+      // Reset any stuck PROCESSING items to PENDING (recovery from unclean shutdown)
+      let recoveredCount = 0;
+      for (const item of queueState.items) {
+        if (item.status === 'PROCESSING') {
+          item.status = 'PENDING';
+          item.startedAt = null;
+          recoveredCount++;
+        }
+      }
+      
+      console.log(`[Queue] Loaded ${queueState.items.length} items from disk`);
+      if (recoveredCount > 0) {
+        console.log(`[Queue] Recovered ${recoveredCount} stuck PROCESSING items to PENDING`);
+        saveQueueState(); // Persist the recovery
+      }
+    } else {
+      console.log('[Queue] No existing queue file found, starting with empty queue');
+    }
+  } catch (error) {
+    console.error('[Queue] Load error:', error.message);
+    // Reset to default state on corruption
+    queueState = {
+      items: [],
+      isRunning: false,
+      lastSaved: Date.now(),
+      stats: {
+        totalProcessed: 0,
+        successCount: 0,
+        failureCount: 0,
+        lastProcessedAt: null,
+        startedAt: new Date().toISOString(),
+        apiCallsTotal: 0,
+        cacheHitsTotal: 0
+      }
+    };
+  }
+}
+
+/**
+ * Save queue state to disk with atomic write
+ * Includes error handling for disk write failures
+ * 
+ * Validates: Requirements 1.5, 3.1, 3.5, 10.3, 10.5
+ */
+function saveQueueState() {
+  try {
+    queueState.lastSaved = Date.now();
+    
+    const data = {
+      version: '2.0',
+      savedAt: new Date().toISOString(),
+      items: queueState.items,
+      isRunning: queueState.isRunning,
+      stats: queueState.stats
+    };
+    
+    // Atomic write: write to temp file then rename
+    const tempFile = QUEUE_FILE_V2 + '.tmp';
+    fs.writeFileSync(tempFile, JSON.stringify(data, null, 2));
+    fs.renameSync(tempFile, QUEUE_FILE_V2);
+    
+  } catch (error) {
+    console.error('[Queue] Save error:', error.message);
+    // Continue execution even if save fails (non-critical)
+  }
+}
+
+/**
+ * Generate a unique ID for queue items
+ * @returns {string} Unique identifier
+ */
+function generateQueueItemId() {
+  return `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
+
+/**
+ * Add a SIM number to the enrichment queue with duplicate prevention
+ * 
+ * @param {string} simNumber - Raw SIM number (will be validated and normalized)
+ * @returns {string|null} Queue item ID if queued, null if skipped
+ * 
+ * Validates: Requirements 1.1, 1.2, 1.3, 1.4, 1.5, 4.1, 4.2
+ * - Validates and normalizes SIM number to 10 digits
+ * - Checks cache for existing enrichment (return null if found)
+ * - Checks queue for duplicate PENDING/PROCESSING items (return null if found)
+ * - Creates new QueueItem with status PENDING, attempts 0, timestamp
+ * - Persists queue state to disk
+ */
+function enqueueSimNumber(simNumber) {
+  // Validate and normalize SIM number
+  const validSim = extractValidSim(simNumber);
+  if (!validSim) {
+    return null; // Invalid SIM number format
+  }
+  
+  // Check cache for existing enrichment - return null if found
+  if (paanelCache[validSim] !== undefined) {
+    queueState.stats.cacheHitsTotal++;
+    return null; // Already cached
+  }
+  
+  // Check queue for duplicate PENDING/PROCESSING items
+  const existingItem = queueState.items.find(item => 
+    item.simNumber === validSim && 
+    (item.status === 'PENDING' || item.status === 'PROCESSING')
+  );
+  
+  if (existingItem) {
+    return null; // Already in queue
+  }
+  
+  // Create new queue item
+  const itemId = generateQueueItemId();
+  const now = new Date().toISOString();
+  
+  /** @type {QueueItem} */
+  const queueItem = {
+    id: itemId,
+    simNumber: validSim,
+    status: 'PENDING',
+    attempts: 0,
+    addedAt: now,
+    startedAt: null,
+    completedAt: null,
+    error: null
+  };
+  
+  // Add to queue
+  queueState.items.push(queueItem);
+  
+  // Persist to disk
+  saveQueueState();
+  
+  return itemId;
+}
+
+/**
+ * Dequeue the next PENDING item and mark it as PROCESSING
+ * 
+ * @returns {QueueItem|null} The item to process, or null if no PENDING items
+ * 
+ * Validates: Requirements 2.2, 10.1
+ * - Finds first PENDING item in queue
+ * - Atomically changes status to PROCESSING
+ * - Persists queue state
+ * - Returns item or null if no PENDING items
+ */
+function dequeueNextItem() {
+  // Find first PENDING item
+  const item = queueState.items.find(i => i.status === 'PENDING');
+  
+  if (!item) {
+    return null; // No pending items
+  }
+  
+  // Atomically change status to PROCESSING
+  item.status = 'PROCESSING';
+  item.startedAt = new Date().toISOString();
+  
+  // Persist queue state
+  saveQueueState();
+  
+  return item;
+}
+
+/**
+ * Mark an item as successfully completed
+ * 
+ * @param {string} itemId - Queue item ID
+ * 
+ * Validates: Requirements 2.5, 4.3
+ * - Validates item exists and status is PROCESSING
+ * - Changes status to COMPLETED
+ * - Persists queue state
+ */
+function markItemCompleted(itemId) {
+  const item = queueState.items.find(i => i.id === itemId);
+  
+  if (!item) {
+    console.error(`[Queue] Item ${itemId} not found`);
+    return;
+  }
+  
+  if (item.status !== 'PROCESSING') {
+    console.warn(`[Queue] Item ${itemId} is not PROCESSING (status: ${item.status})`);
+    return;
+  }
+  
+  // Mark as completed
+  item.status = 'COMPLETED';
+  item.completedAt = new Date().toISOString();
+  item.error = null;
+  
+  // Update stats
+  queueState.stats.totalProcessed++;
+  queueState.stats.successCount++;
+  queueState.stats.lastProcessedAt = item.completedAt;
+  
+  // Persist queue state
+  saveQueueState();
+  
+  console.log(`[Queue] ✓ Completed ${item.simNumber}`);
+}
+
+/**
+ * Mark an item as failed with retry logic
+ * 
+ * @param {string} itemId - Queue item ID
+ * @param {string} errorMessage - Error message describing the failure
+ * 
+ * Validates: Requirements 2.6, 2.7, 8.1, 8.2, 8.3
+ * - Validates item exists and status is PROCESSING
+ * - Increments attempts counter
+ * - If attempts < MAX_RETRIES: sets status to PENDING for retry
+ * - If attempts >= MAX_RETRIES: sets status to FAILED permanently
+ * - Persists queue state
+ */
+function markItemFailed(itemId, errorMessage) {
+  const item = queueState.items.find(i => i.id === itemId);
+  
+  if (!item) {
+    console.error(`[Queue] Item ${itemId} not found`);
+    return;
+  }
+  
+  if (item.status !== 'PROCESSING') {
+    console.warn(`[Queue] Item ${itemId} is not PROCESSING (status: ${item.status})`);
+    return;
+  }
+  
+  // Increment attempts counter
+  item.attempts++;
+  item.error = errorMessage;
+  
+  if (item.attempts < MAX_RETRIES) {
+    // Retry: set back to PENDING
+    item.status = 'PENDING';
+    item.startedAt = null;
+    console.log(`[Queue] → Retry ${item.simNumber} (attempt ${item.attempts}/${MAX_RETRIES}): ${errorMessage}`);
+  } else {
+    // Max retries reached: mark as FAILED
+    item.status = 'FAILED';
+    item.completedAt = new Date().toISOString();
+    
+    // Update stats
+    queueState.stats.totalProcessed++;
+    queueState.stats.failureCount++;
+    queueState.stats.lastProcessedAt = item.completedAt;
+    
+    console.log(`[Queue] ✗ Failed ${item.simNumber} after ${item.attempts} attempts: ${errorMessage}`);
+  }
+  
+  // Persist queue state
+  saveQueueState();
+}
+
+/**
+ * Background queue processor
+ * Processes one SIM at a time with controlled rate limiting
+ */
+/**
+ * Background worker processing loop
+ * Processes items from the queue at a controlled rate
+ * 
+ * Validates: Requirements 2.1, 2.3, 2.4, 2.5, 2.6, 2.8, 5.1, 5.2, 5.5, 9.1, 9.2, 9.3
+ * - Runs loop every 3 seconds while isRunning is true
+ * - Dequeues next PENDING item
+ * - Checks cache first before calling API
+ * - Handles successful enrichment: cache data and mark completed
+ * - Handles null response (temporary failure): mark for retry
+ * - Handles exceptions: mark for retry
+ * - Maintains exactly 3 seconds between API requests
+ */
+async function processSimQueue() {
+  if (!queueState.isRunning) {
+    return; // Worker is stopped
+  }
+  
+  // Get next PENDING item
+  const item = dequeueNextItem();
+  
+  if (!item) {
+    // No pending items - wait and check again
+    setTimeout(() => processSimQueue(), WORKER_INTERVAL_MS);
+    return;
+  }
+  
+  console.log(`[Queue] Processing ${item.simNumber} (${getPendingCount()} remaining)`);
+  
+  // Check cache first (may have been cached by another process)
+  if (paanelCache[item.simNumber] !== undefined) {
+    queueState.stats.cacheHitsTotal++;
+    markItemCompleted(item.id);
+    // Continue immediately to next item
+    setImmediate(() => processSimQueue());
+    return;
+  }
+  
+  // Check if we're in rate limit cooldown or circuit breaker
+  if (paanelDisabledUntilRestart) {
+    console.log('[Queue] Paanel API disabled, stopping queue processing');
+    stopWorker();
+    return;
+  }
+  
+  if (Date.now() < paanelRateLimitUntil) {
+    const remainingSec = Math.ceil((paanelRateLimitUntil - Date.now()) / 1000);
+    console.log(`[Queue] Rate limit active, waiting ${remainingSec}s...`);
+    
+    // Put item back to PENDING
+    item.status = 'PENDING';
+    item.startedAt = null;
+    saveQueueState();
+    
+    // Wait for rate limit to expire
+    setTimeout(() => processSimQueue(), remainingSec * 1000 + 1000);
+    return;
+  }
+  
+  try {
+    // Call API for cache miss
+    const enrichment = await fetchPaanelEnrichment(item.simNumber);
+    queueState.stats.apiCallsTotal++;
+    
+    if (enrichment !== null) {
+      // Success - cache the result
+      paanelCache[item.simNumber] = enrichment;
+      savePaanelCache();
+      markItemCompleted(item.id);
+      
+      console.log(`[Queue] ✓ Success for ${item.simNumber}: ${enrichment.length} record(s)`);
+    } else {
+      // Temporary failure (rate limit, timeout, etc.) - retry
+      markItemFailed(item.id, 'Temporary API failure (null response)');
+    }
+    
+  } catch (error) {
+    // Exception - retry
+    console.error(`[Queue] Error processing ${item.simNumber}:`, error.message);
+    markItemFailed(item.id, `Exception: ${error.message}`);
+  }
+  
+  // Wait exactly WORKER_INTERVAL_MS before processing next item (rate limiting)
+  setTimeout(() => processSimQueue(), WORKER_INTERVAL_MS);
+}
+
+/**
+ * Start the background worker
+ * 
+ * Validates: Requirements 9.1, 9.2, 9.3
+ */
+function startWorker() {
+  if (queueState.isRunning) {
+    console.log('[Queue] Worker already running');
+    return false;
+  }
+  
+  queueState.isRunning = true;
+  queueState.stats.startedAt = new Date().toISOString();
+  saveQueueState();
+  
+  console.log('[Queue] Worker started');
+  
+  // Start processing
+  setImmediate(() => processSimQueue());
+  
+  return true;
+}
+
+/**
+ * Stop the background worker gracefully
+ * Worker will complete current item before stopping
+ * 
+ * Validates: Requirements 9.2, 9.3
+ */
+function stopWorker() {
+  if (!queueState.isRunning) {
+    console.log('[Queue] Worker already stopped');
+    return false;
+  }
+  
+  queueState.isRunning = false;
+  saveQueueState();
+  
+  console.log('[Queue] Worker stopped (will complete current item)');
+  
+  return true;
+}
+
+/**
+ * Get count of items by status
+ */
+function getItemCountByStatus(status) {
+  return queueState.items.filter(i => i.status === status).length;
+}
+
+function getPendingCount() {
+  return getItemCountByStatus('PENDING');
+}
+
+function getProcessingCount() {
+  return getItemCountByStatus('PROCESSING');
+}
+
+function getCompletedCount() {
+  return getItemCountByStatus('COMPLETED');
+}
+
+function getFailedCount() {
+  return getItemCountByStatus('FAILED');
+}
 
 function loadDashboardDb() {
   try {
@@ -334,30 +831,135 @@ async function enrichSimNumber(simNumber) {
 }
 
 /**
- * Enrich both SIM numbers for a device with owner information
- * Processes both SIMs in parallel using Promise.allSettled
- * @param {Object} device - Device record with sim1_number and sim2_number fields
+ * Scan dashboard database and enqueue all unique SIM numbers
+ * This is called on startup and periodically to catch manual updates
  * 
- * Validates: Requirements 3.3, 6.6
- * - Extracts sim1 using extractValidSim(device.sim1_number)
- * - Extracts sim2 using extractValidSim(device.sim2_number)
- * - Uses Promise.allSettled() to enrich both SIMs in parallel
- * - Sets device.sim1_enriched from sim1 enrichment result (empty array if failed)
- * - Sets device.sim2_enriched from sim2 enrichment result (empty array if failed)
- * - Handles promise rejection gracefully (assigns empty arrays)
+ * Validates: Requirements 7.1, 7.2, 7.3, 7.4, 7.5
  */
-async function enrichDeviceSims(device) {
+function scanAndEnqueueAllSims() {
+  let enqueuedCount = 0;
+  const allSims = new Set();
+  
+  // Scan all database sections (new, old, pp, srk)
+  for (const section of ['new', 'old', 'pp', 'srk']) {
+    const sectionDb = dashboardDb[section] || {};
+    
+    for (const deviceId in sectionDb) {
+      const device = sectionDb[deviceId];
+      
+      // Extract and validate SIM1
+      const sim1 = extractValidSim(device.sim1_number);
+      if (sim1) allSims.add(sim1);
+      
+      // Extract and validate SIM2
+      const sim2 = extractValidSim(device.sim2_number);
+      if (sim2) allSims.add(sim2);
+    }
+  }
+  
+  // Also check SIM overrides (manually edited numbers)
+  const simOverrides = loadSimOverrides();
+  for (const urlKey in simOverrides) {
+    const urlOverrides = simOverrides[urlKey];
+    for (const deviceId in urlOverrides) {
+      const override = urlOverrides[deviceId];
+      
+      const sim1 = extractValidSim(override.sim1);
+      if (sim1) allSims.add(sim1);
+      
+      const sim2 = extractValidSim(override.sim2);
+      if (sim2) allSims.add(sim2);
+    }
+  }
+  
+  // Enqueue all discovered SIMs
+  for (const sim of allSims) {
+    const itemId = enqueueSimNumber(sim);
+    if (itemId) {
+      enqueuedCount++;
+    }
+  }
+  
+  if (enqueuedCount > 0) {
+    console.log(`[Queue] Discovered and queued ${enqueuedCount} new SIM(s) from dashboard`);
+    
+    // Auto-start worker if not running
+    if (!queueState.isRunning && getPendingCount() > 0) {
+      startWorker();
+    }
+  }
+  
+  return enqueuedCount;
+}
+
+/**
+ * Watch dashboard database file for changes and auto-enqueue new SIMs
+ * Uses fs.watch to detect when the database is modified
+ */
+function watchDashboardForSimChanges() {
+  let watchTimeout = null;
+  
+  try {
+    fs.watch(DB_FILE, (eventType) => {
+      if (eventType === 'change') {
+        // Debounce: wait 2 seconds after last change before scanning
+        if (watchTimeout) clearTimeout(watchTimeout);
+        
+        watchTimeout = setTimeout(() => {
+          console.log('[Queue] Dashboard file changed, scanning for new SIMs...');
+          loadDashboardDb(); // Reload the database
+          scanAndEnqueueAllSims();
+        }, 2000);
+      }
+    });
+    
+    console.log('[Queue] Watching dashboard database for SIM changes');
+  } catch (error) {
+    console.error('[Queue] Failed to watch dashboard file:', error.message);
+  }
+}
+
+/**
+ * Watch SIM overrides file for changes (manual edits from UI)
+ */
+function watchSimOverridesForChanges() {
+  let watchTimeout = null;
+  
+  try {
+    // Create the file if it doesn't exist
+    if (!fs.existsSync(SIM_FILE)) {
+      fs.writeFileSync(SIM_FILE, '{}');
+    }
+    
+    fs.watch(SIM_FILE, (eventType) => {
+      if (eventType === 'change') {
+        // Debounce: wait 2 seconds after last change before scanning
+        if (watchTimeout) clearTimeout(watchTimeout);
+        
+        watchTimeout = setTimeout(() => {
+          console.log('[Queue] SIM overrides changed, scanning for new SIMs...');
+          scanAndEnqueueAllSims();
+        }, 2000);
+      }
+    });
+    
+    console.log('[Queue] Watching SIM overrides for manual changes');
+  } catch (error) {
+    console.error('[Queue] Failed to watch SIM overrides file:', error.message);
+  }
+}
+
+/**
+ * Get enrichment data for a device from cache (non-blocking)
+ * Returns cached data if available, otherwise returns empty arrays
+ * @param {Object} device - Device record with sim1_number and sim2_number fields
+ */
+function getDeviceEnrichment(device) {
   const sim1 = extractValidSim(device.sim1_number);
   const sim2 = extractValidSim(device.sim2_number);
   
-  // Enrich in parallel if both SIMs exist
-  const [sim1Enriched, sim2Enriched] = await Promise.allSettled([
-    sim1 ? enrichSimNumber(sim1) : Promise.resolve([]),
-    sim2 ? enrichSimNumber(sim2) : Promise.resolve([])
-  ]);
-  
-  device.sim1_enriched = sim1Enriched.status === 'fulfilled' ? sim1Enriched.value : [];
-  device.sim2_enriched = sim2Enriched.status === 'fulfilled' ? sim2Enriched.value : [];
+  device.sim1_enriched = sim1 && paanelCache[sim1] ? paanelCache[sim1] : [];
+  device.sim2_enriched = sim2 && paanelCache[sim2] ? paanelCache[sim2] : [];
 }
 
 function getTargetDb(target) {
@@ -920,26 +1522,11 @@ async function pollTarget(target) {
       }
     }
 
-    // ── NEW: Enrich all devices with Paanel SIM owner data before saving ─────
-    // Validates: Requirements 3.1, 3.2, 3.4
-    // - Gets all devices from target database
-    // - Enriches devices in small batches with delays to avoid API rate limits
-    // - Non-blocking: enrichment failures don't prevent polling from continuing
-    // - Results stored in device.sim1_enriched and device.sim2_enriched fields
+    // ── Populate devices with cached enrichment data ─────────────────────────
+    // Gets cached SIM enrichment data for display (non-blocking)
     const devices = Object.values(getTargetDb(target));
-    
-    // Process in batches of 5 devices with 2 second delay between batches
-    const BATCH_SIZE = 5;
-    const BATCH_DELAY_MS = 2000;
-    
-    for (let i = 0; i < devices.length; i += BATCH_SIZE) {
-      const batch = devices.slice(i, i + BATCH_SIZE);
-      await Promise.allSettled(batch.map(device => enrichDeviceSims(device)));
-      
-      // Add delay between batches (except after the last batch)
-      if (i + BATCH_SIZE < devices.length) {
-        await new Promise(resolve => setTimeout(resolve, BATCH_DELAY_MS));
-      }
+    for (const device of devices) {
+      getDeviceEnrichment(device);
     }
 
     saveDashboardDb();
@@ -1162,6 +1749,316 @@ app.get('/api/paanel/status', (req, res) => {
     rateLimitRemainingSec: Math.max(0, Math.ceil((paanelRateLimitUntil - Date.now()) / 1000)),
     cacheSize: Object.keys(paanelCache).length
   });
+});
+
+// ── Queue Management API V2 ───────────────────────────────────────────────────
+/**
+ * GET /api/paanel/queue/status - Get queue status and statistics
+ * Validates: Requirements 6.1, 6.2, 6.3
+ */
+app.get('/api/paanel/queue/status', (req, res) => {
+  const pendingCount = getPendingCount();
+  const processingCount = getProcessingCount();
+  const completedCount = getCompletedCount();
+  const failedCount = getFailedCount();
+  const totalCount = queueState.items.length;
+  
+  // Calculate estimated time remaining (pendingCount * 3 seconds)
+  const estimatedTimeRemainingSec = pendingCount * (WORKER_INTERVAL_MS / 1000);
+  
+  res.json({
+    isRunning: queueState.isRunning,
+    counts: {
+      total: totalCount,
+      pending: pendingCount,
+      processing: processingCount,
+      completed: completedCount,
+      failed: failedCount
+    },
+    stats: queueState.stats,
+    estimatedTimeRemainingSec,
+    estimatedTimeRemainingFormatted: formatDuration(estimatedTimeRemainingSec),
+    lastSaved: new Date(queueState.lastSaved).toISOString()
+  });
+});
+
+/**
+ * GET /api/paanel/queue/items - Get all queue items with their status
+ * Validates: Requirements 6.4
+ */
+app.get('/api/paanel/queue/items', (req, res) => {
+  // Sort by addedAt timestamp (oldest first)
+  const sortedItems = [...queueState.items].sort((a, b) => 
+    new Date(a.addedAt).getTime() - new Date(b.addedAt).getTime()
+  );
+  
+  // Return simplified view
+  const items = sortedItems.map(item => ({
+    id: item.id,
+    simNumber: item.simNumber,
+    status: item.status,
+    attempts: item.attempts,
+    addedAt: item.addedAt,
+    startedAt: item.startedAt,
+    completedAt: item.completedAt,
+    error: item.error
+  }));
+  
+  res.json({ items });
+});
+
+/**
+ * POST /api/paanel/queue/start - Start the background worker
+ * Validates: Requirements 6.5
+ */
+app.post('/api/paanel/queue/start', (req, res) => {
+  const started = startWorker();
+  
+  res.json({
+    ok: true,
+    status: started ? 'started' : 'already_running',
+    isRunning: queueState.isRunning,
+    pendingCount: getPendingCount()
+  });
+});
+
+/**
+ * POST /api/paanel/queue/stop - Stop the background worker
+ * Validates: Requirements 6.6
+ */
+app.post('/api/paanel/queue/stop', (req, res) => {
+  const stopped = stopWorker();
+  
+  res.json({
+    ok: true,
+    status: stopped ? 'stopped' : 'already_stopped',
+    isRunning: queueState.isRunning
+  });
+});
+
+/**
+ * POST /api/paanel/queue/clear-failed - Reset failed items to pending
+ * Validates: Requirements 6.7
+ */
+app.post('/api/paanel/queue/clear-failed', (req, res) => {
+  let resetCount = 0;
+  
+  for (const item of queueState.items) {
+    if (item.status === 'FAILED') {
+      item.status = 'PENDING';
+      item.attempts = 0;
+      item.error = null;
+      item.startedAt = null;
+      item.completedAt = null;
+      resetCount++;
+    }
+  }
+  
+  if (resetCount > 0) {
+    saveQueueState();
+    console.log(`[Queue] Reset ${resetCount} FAILED items to PENDING`);
+    
+    // Auto-start worker if not running
+    if (!queueState.isRunning) {
+      startWorker();
+    }
+  }
+  
+  res.json({
+    ok: true,
+    resetCount,
+    pendingCount: getPendingCount()
+  });
+});
+
+/**
+ * POST /api/paanel/queue/enqueue/:simNumber - Manually enqueue a SIM
+ */
+app.post('/api/paanel/queue/enqueue/:simNumber', (req, res) => {
+  const simNumber = req.params.simNumber;
+  const itemId = enqueueSimNumber(simNumber);
+  
+  if (itemId) {
+    // Auto-start worker if not running
+    if (!queueState.isRunning) {
+      startWorker();
+    }
+    
+    res.json({
+      ok: true,
+      status: 'queued',
+      itemId,
+      simNumber: extractValidSim(simNumber)
+    });
+  } else {
+    res.json({
+      ok: true,
+      status: 'skipped',
+      reason: 'already_cached_or_queued_or_invalid',
+      simNumber: extractValidSim(simNumber) || simNumber
+    });
+  }
+});
+
+/**
+ * POST /api/paanel/enrich-now/:simNumber - Force immediate enrichment (bypasses queue)
+ * Use when user manually updates a SIM and wants immediate result
+ */
+app.post('/api/paanel/enrich-now/:simNumber', async (req, res) => {
+  const simNumber = req.params.simNumber;
+  const validSim = extractValidSim(simNumber);
+  
+  if (!validSim) {
+    return res.status(400).json({
+      ok: false,
+      error: 'Invalid SIM number format (must be 10 digits)'
+    });
+  }
+  
+  try {
+    // Check cache first
+    if (paanelCache[validSim] !== undefined) {
+      return res.json({
+        ok: true,
+        source: 'cache',
+        simNumber: validSim,
+        data: paanelCache[validSim]
+      });
+    }
+    
+    // Check if API is disabled
+    if (paanelDisabledUntilRestart) {
+      return res.status(503).json({
+        ok: false,
+        error: 'Paanel API is currently disabled (circuit breaker active)'
+      });
+    }
+    
+    // Fetch from API
+    console.log(`[Paanel] Immediate enrichment requested for ${validSim}`);
+    const enrichment = await fetchPaanelEnrichment(validSim);
+    queueState.stats.apiCallsTotal++;
+    
+    if (enrichment !== null) {
+      // Cache the result
+      paanelCache[validSim] = enrichment;
+      savePaanelCache();
+      
+      return res.json({
+        ok: true,
+        source: 'api',
+        simNumber: validSim,
+        data: enrichment
+      });
+    } else {
+      // Temporary failure - enqueue for retry
+      enqueueSimNumber(validSim);
+      if (!queueState.isRunning) {
+        startWorker();
+      }
+      
+      return res.status(503).json({
+        ok: false,
+        error: 'Temporary API failure, queued for retry',
+        queued: true
+      });
+    }
+  } catch (error) {
+    console.error(`[Paanel] Immediate enrichment error for ${validSim}:`, error.message);
+    
+    // Enqueue for retry
+    enqueueSimNumber(validSim);
+    if (!queueState.isRunning) {
+      startWorker();
+    }
+    
+    return res.status(500).json({
+      ok: false,
+      error: error.message,
+      queued: true
+    });
+  }
+});
+
+/**
+ * Helper function to format duration in human-readable format
+ */
+function formatDuration(seconds) {
+  if (seconds < 60) {
+    return `${Math.ceil(seconds)}s`;
+  } else if (seconds < 3600) {
+    const minutes = Math.floor(seconds / 60);
+    const secs = Math.ceil(seconds % 60);
+    return `${minutes}m ${secs}s`;
+  } else {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    return `${hours}h ${minutes}m`;
+  }
+}
+
+// ── OLD Queue Management API (for backward compatibility) ─────────────────────
+app.get('/api/queue/status', (req, res) => {
+  // Redirect to new endpoint
+  res.redirect('/api/paanel/queue/status');
+});
+
+app.post('/api/queue/clear', (req, res) => {
+  res.json({
+    queueLength: simQueue.length,
+    processingActive: queueProcessingActive,
+    stats: queueStats,
+    nextItems: simQueue.slice(0, 10).map(item => ({
+      simNumber: item.simNumber,
+      queuedAt: new Date(item.queuedAt).toISOString(),
+      retryCount: item.retryCount
+    }))
+  });
+});
+
+app.post('/api/queue/clear', (req, res) => {
+  // Clear all PENDING and FAILED items
+  const beforeCount = queueState.items.length;
+  queueState.items = queueState.items.filter(item => 
+    item.status === 'PROCESSING' || item.status === 'COMPLETED'
+  );
+  const clearedCount = beforeCount - queueState.items.length;
+  
+  saveQueueState();
+  console.log(`[Queue] Cleared ${clearedCount} item(s)`);
+  
+  res.json({ ok: true, clearedCount });
+});
+
+app.post('/api/queue/pause', (req, res) => {
+  const stopped = stopWorker();
+  res.json({
+    ok: true,
+    status: stopped ? 'paused' : 'already_paused'
+  });
+});
+
+app.post('/api/queue/resume', (req, res) => {
+  const started = startWorker();
+  res.json({
+    ok: true,
+    status: started ? 'resumed' : 'already_running'
+  });
+});
+
+app.post('/api/queue/add/:simNumber', (req, res) => {
+  // Redirect to new endpoint
+  const simNumber = req.params.simNumber;
+  const itemId = enqueueSimNumber(simNumber);
+  
+  if (itemId) {
+    if (!queueState.isRunning) {
+      startWorker();
+    }
+    res.json({ ok: true, simNumber: extractValidSim(simNumber), status: 'queued' });
+  } else {
+    res.json({ ok: true, simNumber: extractValidSim(simNumber) || simNumber, status: 'already_cached_or_queued' });
+  }
 });
 
 app.get('/api/pp/url/:id', (req, res) => {
@@ -2073,9 +2970,16 @@ for (const section of Object.values(dashboardDb)) {
 saveDashboardDb();
 
 loadPaanelCache();
+// ── Server Startup Initialization ─────────────────────────────────────────────
+// Load all data stores
+loadDashboardDb();
+loadPaanelCache();
+initializeQueue(); // Initialize queue with recovery from disk
 loadAlertStore();
+
 // Sync subscribers for all bots at startup
 syncAllBotSubscribers();
+
 // Load custom keywords if saved, otherwise use built-in defaults
 const savedKws = (() => {
   try { if (fs.existsSync(KEYWORDS_FILE)) return JSON.parse(fs.readFileSync(KEYWORDS_FILE, 'utf8')); } catch {}
@@ -2085,9 +2989,63 @@ if (savedKws && Array.isArray(savedKws)) {
   JUICY_KEYWORDS.length = 0;
   for (const k of savedKws) JUICY_KEYWORDS.push(k);
 }
+
+// ── Graceful Shutdown Handler ────────────────────────────────────────────────
+/**
+ * Handle SIGTERM and SIGINT for graceful shutdown
+ * Validates: Requirements 9.5
+ */
+function gracefulShutdown(signal) {
+  console.log(`\n[Server] Received ${signal}, shutting down gracefully...`);
+  
+  // Stop the worker
+  if (queueState.isRunning) {
+    console.log('[Server] Stopping queue worker...');
+    stopWorker();
+  }
+  
+  // Save final queue state
+  console.log('[Server] Saving queue state...');
+  saveQueueState();
+  
+  // Save dashboard database
+  console.log('[Server] Saving dashboard database...');
+  saveDashboardDb();
+  
+  console.log('[Server] Shutdown complete');
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
 app.listen(PORT, () => {
   console.log(`Device Monitor Dashboard running at http://localhost:${PORT}`);
   console.log(`Dashboard DB: ${DB_FILE}`);
-  runPoller(); // start background polling
+  console.log(`Queue File: ${QUEUE_FILE_V2}`);
+  
+  // Start background polling
+  runPoller();
+  
+  // Initial scan: discover all SIMs from dashboard and enqueue them
+  console.log('[Queue] Performing initial SIM discovery...');
+  const initialCount = scanAndEnqueueAllSims();
+  console.log(`[Queue] Initial scan complete: ${initialCount} new SIM(s) queued`);
+  
+  // Set up file watchers for automatic SIM discovery
+  watchDashboardForSimChanges();
+  watchSimOverridesForChanges();
+  
+  // Auto-start worker if there are pending items
+  if (getPendingCount() > 0) {
+    console.log(`[Queue] Auto-starting worker (${getPendingCount()} pending items)`);
+    startWorker();
+  }
+  
+  // Periodic full scan every 10 minutes (catches any missed changes)
+  setInterval(() => {
+    console.log('[Queue] Periodic SIM scan...');
+    scanAndEnqueueAllSims();
+  }, 10 * 60 * 1000);
 });
 

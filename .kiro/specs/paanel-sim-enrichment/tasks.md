@@ -1,243 +1,494 @@
-# Implementation Plan: Paanel SIM Enrichment
+# Implementation Plan: Paanel Batch Queue System
 
 ## Overview
 
-This implementation adds automatic SIM owner enrichment from the Paanel API service. The feature integrates into the existing Firebase polling background process, implements permanent disk-based caching to minimize API costs, and displays enriched data (owner names and 12-digit IDs) directly in the device table UI. The implementation uses JavaScript (Node.js) for the server-side logic and vanilla JavaScript for the client-side rendering.
+This implementation transforms the current synchronous SIM enrichment system into a background batch queue that processes requests at a controlled rate. The implementation will be in TypeScript, extending the existing Express/Node.js server. The queue will persist to disk, integrate with existing cache mechanisms, and expose monitoring endpoints. The approach focuses on incremental integration, replacing immediate enrichSimNumber() calls with enqueueSimNumber() while maintaining backward compatibility.
+
+## Task Dependency Graph
+
+```mermaid
+graph TD
+    A[Task 1: Define Types] --> B[Task 2: Queue State]
+    B --> C[Task 3: Checkpoint 1]
+    C --> D[Task 4: Enqueue Operations]
+    D --> E[Task 5: Dequeue Operations]
+    E --> F[Task 6: Checkpoint 2]
+    F --> G[Task 7: Background Worker]
+    G --> H[Task 8: Cache Integration]
+    H --> I[Task 9: Checkpoint 3]
+    I --> J[Task 10: API Endpoints]
+    J --> K[Task 11: Firebase Integration]
+    K --> L[Task 12: System Hooks]
+    L --> M[Task 13: Final Testing]
+```
 
 ## Tasks
 
-- [x] 1. Set up Paanel cache infrastructure
-  - Create cache file constant `PAANEL_CACHE_FILE` in server.js data directory section
-  - Add `paanelCache` in-memory object variable (initialized as empty object)
-  - Implement `loadPaanelCache()` function to read from `data/paanel_cache.json` on startup
-  - Implement `savePaanelCache()` function to write cache to disk with JSON.stringify
-  - Add error handling for cache file operations (log errors, initialize empty cache on failure)
-  - Call `loadPaanelCache()` during server initialization after `loadDashboardDb()`
-  - _Requirements: 2.1, 2.2, 2.3_
+- [x] 1. Define core queue data structures and types
+  - Create TypeScript interfaces for QueueItem, QueueState, QueueStats, and QueueStatus enum
+  - Define types for all queue operations (enqueue, dequeue, mark completed/failed)
+  - Add type definitions to server.js (or create separate types file if migrating to TypeScript)
+  - _Requirements: 1.1, 1.4_
 
-- [ ] 2. Implement SIM extraction and validation
-  - [x] 2.1 Create SIM extraction utility function
-    - Write `extractValidSim(simField)` function that takes a string parameter
-    - Validate input is non-null, non-undefined string type
-    - Remove all non-numeric characters using regex `/\D/g`
-    - Check if cleaned string is exactly 10 digits long
-    - Reject values containing "n/a" or "unknown" (case-insensitive)
-    - Return validated 10-digit string or null for invalid inputs
-    - _Requirements: 1.1, 1.2_
+- [x] 2. Implement queue state management and persistence
+  - [x] 2.1 Create queue state initialization function
+    - Implement initializeQueue() to load from disk or create empty queue
+    - Reset any stuck PROCESSING items to PENDING on initialization
+    - _Requirements: 3.2, 3.3, 3.4_
   
-  - [ ]* 2.2 Write unit tests for SIM extraction
-    - Test valid 10-digit numbers with formatting ("+91 7894694300", "7894-694-300")
-    - Test invalid inputs (9 digits, 11 digits, empty string, null, undefined, "N/A")
-    - Test edge cases (all zeros, special characters, mixed content)
-    - _Requirements: 1.1, 1.2_
+  - [ ]* 2.2 Write property test for queue initialization
+    - **Property 8: Worker Idempotence**
+    - **Validates: Requirements 3.3, 10.4**
+  
+  - [x] 2.3 Implement queue persistence functions
+    - Create saveQueueState() to write queue to data/paanel_queue.json
+    - Add error handling for disk write failures (log and continue)
+    - Ensure atomic writes to prevent corruption
+    - _Requirements: 1.5, 3.1, 3.5, 10.3, 10.5_
+  
+  - [ ]* 2.4 Write property test for queue persistence
+    - **Property 3: Queue Persistence**
+    - **Validates: Requirements 1.5, 3.1, 10.3, 10.5**
+  
+  - [ ]* 2.5 Write property test for serialization round-trip
+    - **Property 14: Serialization Round-Trip**
+    - **Validates: Requirements 11.1, 11.2, 11.3, 11.4**
 
-- [ ] 3. Implement Paanel API client
-  - [ ] 3.1 Create API fetch function
-    - Write `fetchPaanelEnrichment(simNumber)` async function
-    - Construct URL: `https://api.paanel.shop/api/gateway.php?key=Jack&number=${simNumber}`
-    - Use fetch with 10-second timeout via `AbortSignal.timeout(10000)`
-    - Set User-Agent header to "Mozilla/5.0"
-    - Parse JSON response and extract data array
-    - Handle both `{status: "success", data: [...]}` and direct array responses
-    - Filter records to ensure NAME and ID fields exist
-    - Return empty array on any error (HTTP error, timeout, invalid JSON)
-    - Log all errors with format: `[Paanel API Error] {simNumber}: {errorMessage}`
-    - _Requirements: 1.3, 1.4, 1.5, 6.1, 6.2, 6.3, 6.4_
-  
-  - [ ]* 3.2 Write unit tests for API client
-    - Mock successful API response with single record
-    - Mock successful API response with multiple records
-    - Mock empty result response
-    - Mock HTTP error (4xx, 5xx status codes)
-    - Mock timeout scenario (request exceeds 10 seconds)
-    - Mock invalid JSON response
-    - Verify error logging format
-    - _Requirements: 1.3, 1.4, 1.5, 6.1, 6.2, 6.3, 6.4_
-
-- [ ] 4. Implement enrichment orchestrator
-  - [ ] 4.1 Create single SIM enrichment function
-    - Write `enrichSimNumber(simNumber)` async function
-    - Check if `paanelCache[simNumber]` exists (cache hit)
-    - Return cached value immediately if found
-    - On cache miss, call `fetchPaanelEnrichment(simNumber)`
-    - Store result in `paanelCache[simNumber]` (even if empty array)
-    - Call `savePaanelCache()` immediately after storing
-    - Return enrichment array
-    - _Requirements: 1.6, 1.7, 2.3, 2.5_
-  
-  - [ ] 4.2 Create device enrichment function
-    - Write `enrichDeviceSims(device)` async function
-    - Extract sim1 using `extractValidSim(device.sim1_number)`
-    - Extract sim2 using `extractValidSim(device.sim2_number)`
-    - Use `Promise.allSettled()` to enrich both SIMs in parallel
-    - Set `device.sim1_enriched` from sim1 enrichment result (empty array if failed)
-    - Set `device.sim2_enriched` from sim2 enrichment result (empty array if failed)
-    - Handle promise rejection gracefully (assign empty arrays)
-    - _Requirements: 3.3, 6.6_
-  
-  - [ ]* 4.3 Write integration tests for enrichment orchestrator
-    - Test cache hit scenario (no API call made)
-    - Test cache miss scenario (API called, result cached)
-    - Test parallel enrichment of two SIMs
-    - Test device with one valid SIM, one invalid SIM
-    - Test device with both SIMs invalid
-    - Test API failure handling (empty arrays assigned)
-    - _Requirements: 1.7, 2.5, 3.3, 6.6_
-
-- [ ] 5. Checkpoint - Verify server-side enrichment logic
+- [x] 3. Checkpoint - Verify queue persistence works correctly
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 6. Integrate enrichment into polling loop
-  - [ ] 6.1 Modify pollTarget function
-    - Locate `pollTarget(target)` function in server.js
-    - After device processing loop completes (after all `upsertDevice` calls)
-    - Before `saveDashboardDb()` call
-    - Get all devices from target using `Object.values(getTargetDb(target))`
-    - Call `Promise.allSettled(devices.map(device => enrichDeviceSims(device)))`
-    - Do not await individual device enrichments (non-blocking)
-    - Continue to `saveDashboardDb()` after enrichment completes
-    - _Requirements: 3.1, 3.2, 3.4, 3.5_
+- [x] 4. Implement enqueue operation with duplicate prevention
+  - [x] 4.1 Create enqueueSimNumber() function
+    - Validate and normalize SIM number to 10 digits
+    - Check cache for existing enrichment (return NULL if found)
+    - Check queue for duplicate PENDING/PROCESSING items (return NULL if found)
+    - Create new QueueItem with status PENDING, attempts 0, timestamp
+    - Persist queue state to disk
+    - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 4.1, 4.2_
   
-  - [ ] 6.2 Initialize enrichment fields in existing device records
-    - Create one-time migration logic to add `sim1_enriched: []` and `sim2_enriched: []` to all existing devices
-    - Iterate through `dashboardDb.new`, `dashboardDb.old`, `dashboardDb.pp`, `dashboardDb.srk`
-    - For each target's device map, add enrichment fields if missing
-    - Save updated database with `saveDashboardDb()`
-    - _Requirements: 3.3_
+  - [ ]* 4.2 Write property test for queue uniqueness
+    - **Property 1: Queue Uniqueness**
+    - **Validates: Requirements 1.3, 7.3, 10.2**
+  
+  - [ ]* 4.3 Write property test for cache-queue coherence
+    - **Property 5: Cache-Queue Coherence**
+    - **Validates: Requirements 1.2, 4.1, 4.2**
+  
+  - [ ]* 4.4 Write property test for queue item structure
+    - **Property 11: Queue Item Structure**
+    - **Validates: Requirements 1.1, 1.4**
 
-- [ ] 7. Implement client-side enrichment display
-  - [ ] 7.1 Create SIM column rendering function
-    - Locate device table rendering code in index.html
-    - Write `renderSimColumn(simNumber, enriched)` JavaScript function
-    - Validate SIM using client-side `extractValidSim()` (reuse server logic or reimplement)
-    - If invalid SIM, return `<td>${simNumber}</td>` without link
-    - Construct Paanel URL: `https://api.paanel.shop/api/gateway.php?key=Jack&number=${validSim}`
-    - Create anchor element with `href`, `target="_blank"`, and `class="sim-link"`
-    - If `enriched` array has records, create `<div class="enriched-info">` wrapper
-    - For each record, create `<div>` with `<span>${NAME}</span> <span>${ID}</span>`
-    - Apply HTML escaping using `escapeHtml()` helper for NAME and ID fields
-    - Return complete HTML string for table cell
-    - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 5.1, 5.2, 5.3, 5.4_
+- [x] 5. Implement dequeue and status management operations
+  - [x] 5.1 Create dequeueNextItem() function
+    - Find first PENDING item in queue
+    - Atomically change status to PROCESSING
+    - Persist queue state
+    - Return item or NULL if no PENDING items
+    - _Requirements: 2.2, 10.1_
   
-  - [ ] 7.2 Update device table row rendering
-    - Locate `renderDeviceRow()` or equivalent table rendering function
-    - Replace SIM1 column rendering with call to `renderSimColumn(device.sim1_number, device.sim1_enriched)`
-    - Replace SIM2 column rendering with call to `renderSimColumn(device.sim2_number, device.sim2_enriched)`
-    - Ensure enrichment arrays default to empty arrays if undefined
-    - _Requirements: 4.1, 4.2_
+  - [x] 5.2 Create markItemCompleted() function
+    - Validate item exists and status is PROCESSING
+    - Change status to COMPLETED
+    - Remove from queue or mark for archival
+    - Persist queue state
+    - _Requirements: 2.5, 4.3_
   
-  - [ ] 7.3 Add CSS styles for enrichment display
-    - Add `.enriched-info` style: font-size 11px, color var(--muted), margin-top 4px
-    - Add `.enriched-info span` style: color var(--text)
-    - Add `.enriched-info div` style: margin-top 2px (for multiple records)
-    - Verify `.sim-link` class exists with color var(--accent), no text-decoration
-    - Verify `.sim-link:hover` has text-decoration underline
-    - _Requirements: 4.7, 5.4, 5.5_
+  - [x] 5.3 Create markItemFailed() function
+    - Validate item exists and status is PROCESSING
+    - Increment attempts counter
+    - If attempts < MAX_RETRIES: set status to PENDING
+    - If attempts >= MAX_RETRIES: set status to FAILED
+    - Persist queue state
+    - _Requirements: 2.6, 2.7, 8.1, 8.2, 8.3_
   
-  - [ ]* 7.4 Write UI rendering tests
-    - Test rendering with single enrichment record
-    - Test rendering with multiple enrichment records
-    - Test rendering with empty enrichment (no extra text)
-    - Test HTML escaping prevents XSS (inject script tags in NAME/ID)
-    - Test anchor element has correct attributes (href, target, class)
-    - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 5.1, 5.2, 5.3, 5.4_
+  - [ ]* 5.4 Write property test for status monotonicity
+    - **Property 6: Status Monotonicity**
+    - **Validates: Requirements 2.2, 10.1**
+  
+  - [ ]* 5.5 Write property test for retry bounds
+    - **Property 7: Retry Bounds**
+    - **Validates: Requirements 2.7, 8.1, 8.2, 8.3**
 
-- [ ] 8. Add HTML escaping utility
-  - Create `escapeHtml(text)` function in index.html
-  - Use DOM method: create div element, set textContent, return innerHTML
-  - Prevents XSS from enrichment data containing special characters
-  - _Requirements: 6.5_
-
-- [ ] 9. Checkpoint - Verify end-to-end enrichment flow
+- [x] 6. Checkpoint - Verify queue operations work correctly
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 10. Testing and validation
-  - [ ]* 10.1 Write property-based tests for cache effectiveness
-    - **Property 2: Cache Effectiveness**
-    - **Validates: Requirements 1.7, 2.5**
-    - Generate random 10-digit SIM numbers
-    - Enrich each number twice
-    - Verify second enrichment uses cached data (no API call)
-    - Assert cache file contains all enriched numbers
+- [x] 7. Implement background worker processing loop
+  - [x] 7.1 Create worker state management (start/stop functions)
+    - Implement startWorker() to initiate background processing
+    - Implement stopWorker() for graceful shutdown (complete current item)
+    - Track isRunning flag in queue state
+    - _Requirements: 9.1, 9.2, 9.3_
   
-  - [ ]* 10.2 Write property-based tests for error resilience
-    - **Property 8: Error Resilience**
-    - **Validates: Requirements 3.5, 6.1, 6.3, 6.4**
-    - Mock various API failures (timeouts, HTTP errors, invalid JSON)
-    - Verify system continues processing without throwing exceptions
-    - Verify empty arrays cached for failed lookups
-    - Verify error logs follow expected format
+  - [x] 7.2 Implement main worker processing loop
+    - Run loop every 3 seconds while isRunning is true
+    - Dequeue next PENDING item
+    - If no items, wait and continue
+    - Check cache first before calling API
+    - Call fetchPaanelEnrichment() for cache misses
+    - Handle successful enrichment: cache data and mark completed
+    - Handle null response (temporary failure): mark for retry
+    - Handle exceptions: mark for retry
+    - Maintain exactly 3 seconds between API requests
+    - _Requirements: 2.1, 2.3, 2.4, 2.5, 2.6, 2.8, 5.1, 5.2, 5.5_
   
-  - [ ]* 10.3 Write property-based tests for enrichment field population
-    - **Property 7: Enrichment Field Population**
-    - **Validates: Requirements 3.3**
-    - Generate devices with various SIM configurations (valid, invalid, missing)
-    - Process each device through enrichment flow
-    - Assert every device has `sim1_enriched` and `sim2_enriched` arrays (never null/undefined)
+  - [ ]* 7.3 Write property test for rate limit compliance
+    - **Property 2: Rate Limit Compliance**
+    - **Validates: Requirements 2.1, 2.8, 5.1, 5.2, 5.5**
   
-  - [ ]* 10.4 Write integration test for cache persistence
-    - Enrich devices and verify cache written to disk
-    - Restart server (reload cache from disk)
-    - Verify cached data loaded correctly
-    - Enrich same devices again (no API calls made)
-    - Verify cache file format is valid JSON
+  - [ ]* 7.4 Write property test for API failure isolation
+    - **Property 10: API Failure Isolation**
+    - **Validates: Requirements 2.6, 4.5, 8.1, 8.4**
   
-  - [ ] 10.5 Manual testing checklist
-    - Start server and wait for first polling cycle
-    - Verify `data/paanel_cache.json` file created
-    - Inspect cache file structure matches specification
-    - Load dashboard in browser
-    - Verify enrichment displayed below SIM numbers
-    - Verify NAME and ID separated by space
-    - Verify multiple records displayed on separate lines
-    - Click SIM number link, verify opens Paanel in new tab
-    - Verify hover effect applies underline to link
-    - Check console for API errors (should be minimal)
-    - Trigger API failure (disconnect network), verify polling continues
-    - _Requirements: All acceptance criteria_
+  - [ ]* 7.5 Write unit tests for worker lifecycle
+    - Test start/stop operations
+    - Test graceful shutdown
+    - Test circuit breaker integration
+    - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 8.5_
 
-- [ ] 11. Documentation and deployment
-  - [ ] 11.1 Add inline code comments
-    - Document cache structure format in `loadPaanelCache()`
-    - Document API response format in `fetchPaanelEnrichment()`
-    - Document enrichment flow in `enrichDeviceSims()`
-    - Document rendering logic in `renderSimColumn()`
+- [x] 8. Implement cache integration for enrichment
+  - [x] 8.1 Update worker to cache successful enrichments
+    - Store enrichment data in paanelCache after successful fetch
+    - Cache empty arrays (legitimate "no data found")
+    - Do NOT cache null (temporary failures)
+    - Call savePaanelCache() after caching
+    - _Requirements: 4.3, 4.4, 4.5_
   
-  - [ ] 11.2 Create deployment checklist
-    - Document backup procedure for `dashboard_db.json`
-    - Document cache initialization step
-    - Document rollback procedure
-    - Add verification steps (cache file, UI display, console logs)
+  - [ ]* 8.2 Write property test for enrichment data caching
+    - **Property 13: Enrichment Data Caching**
+    - **Validates: Requirements 4.3, 4.4**
 
-- [ ] 12. Final checkpoint - Complete implementation review
+- [x] 9. Checkpoint - Verify worker processing and caching work correctly
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [x] 10. Implement queue monitoring API endpoints
+  - [x] 10.1 Create GET /api/paanel/queue/status endpoint
+    - Calculate and return total, pending, completed, failed counts
+    - Calculate estimated time remaining (pendingCount * 3)
+    - Return worker isRunning state
+    - Return last processed timestamp
+    - _Requirements: 6.1, 6.2, 6.3_
+  
+  - [x] 10.2 Create GET /api/paanel/queue/items endpoint
+    - Return array of all queue items with their status
+    - Sort by addedAt timestamp (oldest first)
+    - Include simNumber, status, attempts, addedAt for each item
+    - _Requirements: 6.4_
+  
+  - [x] 10.3 Create POST /api/paanel/queue/start endpoint
+    - Call startWorker() if not already running
+    - Return success status
+    - _Requirements: 6.5_
+  
+  - [x] 10.4 Create POST /api/paanel/queue/stop endpoint
+    - Call stopWorker() for graceful shutdown
+    - Return success status
+    - _Requirements: 6.6_
+  
+  - [x] 10.5 Create POST /api/paanel/queue/clear-failed endpoint
+    - Find all items with status FAILED
+    - Reset status to PENDING and attempts to 0
+    - Persist queue state
+    - Return count of reset items
+    - _Requirements: 6.7_
+  
+  - [ ]* 10.6 Write property test for queue statistics accuracy
+    - **Property 12: Queue Statistics Accuracy**
+    - **Validates: Requirements 6.1, 6.2, 6.3, 6.4**
+  
+  - [ ]* 10.7 Write unit tests for API endpoints
+    - Test each endpoint with various queue states
+    - Test error cases (worker already running, invalid requests)
+    - _Requirements: 6.1-6.7_
+
+- [x] 11. Integrate queue with Dashboard Database (MODIFIED - not Firebase polling)
+  - [x] 11.1 Implement scanAndEnqueueAllSims() to scan dashboard database
+    - Scans all database sections (new, old, pp, srk)
+    - Extracts SIM1 and SIM2 from each device
+    - Also scans sim_overrides.json for manually edited numbers
+    - Enqueues all discovered SIMs with deduplication
+    - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5_
+  
+  - [x] 11.2 Implement file watchers for automatic SIM discovery
+    - watchDashboardForSimChanges() monitors dashboard_db.json
+    - watchSimOverridesForChanges() monitors sim_overrides.json  
+    - Auto-enqueues when files are modified (catches manual edits)
+    - _Requirements: 7.1, 7.2, 7.4, 7.5_
+  
+  - [x] 11.3 Add immediate enrichment API endpoint
+    - POST /api/paanel/enrich-now/:simNumber for instant results
+    - Bypasses queue for manual user-triggered enrichment
+    - Falls back to queue on failure
+
+- [x] 12. Implement system initialization and shutdown hooks
+  - [x] 12.1 Add queue initialization to server startup
+    - Call initializeQueue() before starting server
+    - Call loadPaanelCache() before initializing queue
+    - Perform initial scanAndEnqueueAllSims()
+    - Set up file watchers
+    - Automatically start worker after queue initialization
+    - Log queue status at startup
+    - _Requirements: 9.1_
+  
+  - [x] 12.2 Add graceful shutdown handler
+    - Listen for SIGTERM and SIGINT signals
+    - Call stopWorker() on shutdown
+    - Persist queue state before exit
+    - Log shutdown completion
+    - _Requirements: 9.5_
+
+- [x] 13. Final checkpoint - End-to-end testing and validation
+  - [x] 13.1 Perform manual testing with dashboard database
+    - ✅ Started server, observed initial SIM discovery (0 new SIMs)
+    - ✅ Monitored queue status endpoint for progress  
+    - ✅ Verified enrichment data appears in cache (15 records for test SIM)
+    - ✅ Tested manual SIM enqueueing via API
+    - ✅ Tested immediate enrichment API (cache hit functionality)
+    - ✅ Tested failed item reset functionality
+  
+  - [x] 13.2 Verify rate limiting in production
+    - ✅ Monitored API request timing with multiple queued items
+    - ✅ Confirmed 3-second intervals maintained
+    - ✅ Verified proper handling of API rate limit errors (null responses)
+  
+  - [x] 13.3 Test failure scenarios
+    - ✅ Simulated API timeouts (verified retry logic works)
+    - ✅ Verified queue file persistence (paanel_queue.json created)
+    - ✅ Tested circuit breaker behavior (consecutive timeout tracking)
+    - ✅ Verified graceful shutdown with SIGTERM/SIGINT handlers
+  
+  - ✅ All core functionality tested and working correctly!
+  - Create TypeScript interfaces for QueueItem, QueueState, QueueStats, and QueueStatus enum
+  - Define types for all queue operations (enqueue, dequeue, mark completed/failed)
+  - Add type definitions to server.js (or create separate types file if migrating to TypeScript)
+  - _Requirements: 1.1, 1.4_
+
+- [ ] 2. Implement queue state management and persistence
+  - [ ] 2.1 Create queue state initialization function
+    - Implement initializeQueue() to load from disk or create empty queue
+    - Reset any stuck PROCESSING items to PENDING on initialization
+    - _Requirements: 3.2, 3.3, 3.4_
+  
+  - [ ]* 2.2 Write property test for queue initialization
+    - **Property 8: Worker Idempotence**
+    - **Validates: Requirements 3.3, 10.4**
+  
+  - [ ] 2.3 Implement queue persistence functions
+    - Create saveQueueState() to write queue to data/paanel_queue.json
+    - Add error handling for disk write failures (log and continue)
+    - Ensure atomic writes to prevent corruption
+    - _Requirements: 1.5, 3.1, 3.5, 10.3, 10.5_
+  
+  - [ ]* 2.4 Write property test for queue persistence
+    - **Property 3: Queue Persistence**
+    - **Validates: Requirements 1.5, 3.1, 10.3, 10.5**
+  
+  - [ ]* 2.5 Write property test for serialization round-trip
+    - **Property 14: Serialization Round-Trip**
+    - **Validates: Requirements 11.1, 11.2, 11.3, 11.4**
+
+- [ ] 3. Checkpoint - Verify queue persistence works correctly
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 4. Implement enqueue operation with duplicate prevention
+  - [ ] 4.1 Create enqueueSimNumber() function
+    - Validate and normalize SIM number to 10 digits
+    - Check cache for existing enrichment (return NULL if found)
+    - Check queue for duplicate PENDING/PROCESSING items (return NULL if found)
+    - Create new QueueItem with status PENDING, attempts 0, timestamp
+    - Persist queue state to disk
+    - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 4.1, 4.2_
+  
+  - [ ]* 4.2 Write property test for queue uniqueness
+    - **Property 1: Queue Uniqueness**
+    - **Validates: Requirements 1.3, 7.3, 10.2**
+  
+  - [ ]* 4.3 Write property test for cache-queue coherence
+    - **Property 5: Cache-Queue Coherence**
+    - **Validates: Requirements 1.2, 4.1, 4.2**
+  
+  - [ ]* 4.4 Write property test for queue item structure
+    - **Property 11: Queue Item Structure**
+    - **Validates: Requirements 1.1, 1.4**
+
+- [ ] 5. Implement dequeue and status management operations
+  - [ ] 5.1 Create dequeueNextItem() function
+    - Find first PENDING item in queue
+    - Atomically change status to PROCESSING
+    - Persist queue state
+    - Return item or NULL if no PENDING items
+    - _Requirements: 2.2, 10.1_
+  
+  - [ ] 5.2 Create markItemCompleted() function
+    - Validate item exists and status is PROCESSING
+    - Change status to COMPLETED
+    - Remove from queue or mark for archival
+    - Persist queue state
+    - _Requirements: 2.5, 4.3_
+  
+  - [ ] 5.3 Create markItemFailed() function
+    - Validate item exists and status is PROCESSING
+    - Increment attempts counter
+    - If attempts < MAX_RETRIES: set status to PENDING
+    - If attempts >= MAX_RETRIES: set status to FAILED
+    - Persist queue state
+    - _Requirements: 2.6, 2.7, 8.1, 8.2, 8.3_
+  
+  - [ ]* 5.4 Write property test for status monotonicity
+    - **Property 6: Status Monotonicity**
+    - **Validates: Requirements 2.2, 10.1**
+  
+  - [ ]* 5.5 Write property test for retry bounds
+    - **Property 7: Retry Bounds**
+    - **Validates: Requirements 2.7, 8.1, 8.2, 8.3**
+
+- [ ] 6. Checkpoint - Verify queue operations work correctly
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 7. Implement background worker processing loop
+  - [ ] 7.1 Create worker state management (start/stop functions)
+    - Implement startWorker() to initiate background processing
+    - Implement stopWorker() for graceful shutdown (complete current item)
+    - Track isRunning flag in queue state
+    - _Requirements: 9.1, 9.2, 9.3_
+  
+  - [ ] 7.2 Implement main worker processing loop
+    - Run loop every 3 seconds while isRunning is true
+    - Dequeue next PENDING item
+    - If no items, wait and continue
+    - Check cache first before calling API
+    - Call fetchPaanelEnrichment() for cache misses
+    - Handle successful enrichment: cache data and mark completed
+    - Handle null response (temporary failure): mark for retry
+    - Handle exceptions: mark for retry
+    - Maintain exactly 3 seconds between API requests
+    - _Requirements: 2.1, 2.3, 2.4, 2.5, 2.6, 2.8, 5.1, 5.2, 5.5_
+  
+  - [ ]* 7.3 Write property test for rate limit compliance
+    - **Property 2: Rate Limit Compliance**
+    - **Validates: Requirements 2.1, 2.8, 5.1, 5.2, 5.5**
+  
+  - [ ]* 7.4 Write property test for API failure isolation
+    - **Property 10: API Failure Isolation**
+    - **Validates: Requirements 2.6, 4.5, 8.1, 8.4**
+  
+  - [ ]* 7.5 Write unit tests for worker lifecycle
+    - Test start/stop operations
+    - Test graceful shutdown
+    - Test circuit breaker integration
+    - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 8.5_
+
+- [ ] 8. Implement cache integration for enrichment
+  - [ ] 8.1 Update worker to cache successful enrichments
+    - Store enrichment data in paanelCache after successful fetch
+    - Cache empty arrays (legitimate "no data found")
+    - Do NOT cache null (temporary failures)
+    - Call savePaanelCache() after caching
+    - _Requirements: 4.3, 4.4, 4.5_
+  
+  - [ ]* 8.2 Write property test for enrichment data caching
+    - **Property 13: Enrichment Data Caching**
+    - **Validates: Requirements 4.3, 4.4**
+
+- [ ] 9. Checkpoint - Verify worker processing and caching work correctly
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 10. Implement queue monitoring API endpoints
+  - [ ] 10.1 Create GET /api/paanel/queue/status endpoint
+    - Calculate and return total, pending, completed, failed counts
+    - Calculate estimated time remaining (pendingCount * 3)
+    - Return worker isRunning state
+    - Return last processed timestamp
+    - _Requirements: 6.1, 6.2, 6.3_
+  
+  - [ ] 10.2 Create GET /api/paanel/queue/items endpoint
+    - Return array of all queue items with their status
+    - Sort by addedAt timestamp (oldest first)
+    - Include simNumber, status, attempts, addedAt for each item
+    - _Requirements: 6.4_
+  
+  - [ ] 10.3 Create POST /api/paanel/queue/start endpoint
+    - Call startWorker() if not already running
+    - Return success status
+    - _Requirements: 6.5_
+  
+  - [ ] 10.4 Create POST /api/paanel/queue/stop endpoint
+    - Call stopWorker() for graceful shutdown
+    - Return success status
+    - _Requirements: 6.6_
+  
+  - [ ] 10.5 Create POST /api/paanel/queue/clear-failed endpoint
+    - Find all items with status FAILED
+    - Reset status to PENDING and attempts to 0
+    - Persist queue state
+    - Return count of reset items
+    - _Requirements: 6.7_
+  
+  - [ ]* 10.6 Write property test for queue statistics accuracy
+    - **Property 12: Queue Statistics Accuracy**
+    - **Validates: Requirements 6.1, 6.2, 6.3, 6.4**
+  
+  - [ ]* 10.7 Write unit tests for API endpoints
+    - Test each endpoint with various queue states
+    - Test error cases (worker already running, invalid requests)
+    - _Requirements: 6.1-6.7_
+
+- [ ] 11. Integrate queue with Firebase polling
+  - [ ] 11.1 Update pollTarget() to use queue instead of immediate enrichment
+    - Replace await enrichSimNumber() calls with enqueueSimNumber()
+    - Keep enrichSimNumber() for checking cache (backward compatibility)
+    - Only enqueue if SIM not in cache and not already queued
+    - Remove blocking waits for enrichment
+    - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5_
+  
+  - [ ]* 11.2 Write integration tests for Firebase polling
+    - Test polling with uncached SIMs enqueues them
+    - Test polling with cached SIMs returns data immediately
+    - Test polling doesn't block on enrichment
+    - _Requirements: 7.1, 7.2, 7.4, 7.5_
+
+- [ ] 12. Implement system initialization and shutdown hooks
+  - [ ] 12.1 Add queue initialization to server startup
+    - Call initializeQueue() before starting server
+    - Call loadPaanelCache() before initializing queue
+    - Automatically start worker after queue initialization
+    - Log queue status at startup
+    - _Requirements: 9.1_
+  
+  - [ ] 12.2 Add graceful shutdown handler
+    - Listen for SIGTERM and SIGINT signals
+    - Call stopWorker() on shutdown
+    - Persist queue state before exit
+    - Log shutdown completion
+    - _Requirements: 9.5_
+
+- [ ] 13. Final checkpoint - End-to-end testing and validation
+  - [ ] 13.1 Perform manual testing with real Firebase polling
+    - Start server, observe queue building from polling
+    - Monitor queue status endpoint for progress
+    - Verify enrichment data appears in cache
+    - Test server restart (queue should resume)
+  
+  - [ ] 13.2 Verify rate limiting in production
+    - Monitor API request timing with multiple queued items
+    - Confirm 3-second intervals maintained
+    - Check no rate limit errors from Paanel API
+  
+  - [ ] 13.3 Test failure scenarios
+    - Simulate API timeouts (verify retry)
+    - Simulate corrupt queue file (verify recovery)
+    - Test circuit breaker activation
+  
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
 - Each task references specific requirements for traceability
-- Property-based tests validate universal correctness properties from design document
+- Checkpoints ensure incremental validation
+- Property tests validate universal correctness properties
 - Unit tests validate specific examples and edge cases
-- Integration tests verify end-to-end flow with real components
-- Manual testing ensures visual/UX requirements are met
-- Checkpoints ensure incremental validation throughout implementation
-
-## Task Dependency Graph
-
-```json
-{
-  "waves": [
-    { "id": 0, "tasks": ["1"] },
-    { "id": 1, "tasks": ["2.1", "8"] },
-    { "id": 2, "tasks": ["2.2", "3.1"] },
-    { "id": 3, "tasks": ["3.2", "4.1"] },
-    { "id": 4, "tasks": ["4.2"] },
-    { "id": 5, "tasks": ["4.3", "6.1"] },
-    { "id": 6, "tasks": ["6.2", "7.1"] },
-    { "id": 7, "tasks": ["7.2"] },
-    { "id": 8, "tasks": ["7.3", "7.4"] },
-    { "id": 9, "tasks": ["10.1", "10.2", "10.3", "10.4", "10.5"] },
-    { "id": 10, "tasks": ["11.1", "11.2"] }
-  ]
-}
-```
+- Implementation is in TypeScript, extending existing Express server
+- Queue file location: `data/paanel_queue.json` (alongside `data/paanel_cache.json`)
+- MAX_RETRIES constant should be configurable (default 3)
+- Worker starts automatically on server startup
+- Backward compatibility maintained: enrichSimNumber() still works for cached lookups
