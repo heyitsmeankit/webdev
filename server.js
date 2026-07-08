@@ -632,7 +632,8 @@ function savePaanelCache() {
  * Validates: Requirements 1.1, 1.2
  * - Checks input is non-null, non-undefined string type
  * - Removes all non-numeric characters using regex /\D/g
- * - Validates cleaned string is exactly 10 digits long
+ * - Handles 11/12 digit numbers (country codes) by extracting last 10 digits
+ * - Validates cleaned string is at least 10 digits long
  * - Rejects values containing "n/a" or "unknown" (case-insensitive)
  * - Returns validated 10-digit string or null for invalid inputs
  */
@@ -648,11 +649,12 @@ function extractValidSim(simField) {
   // Remove all non-numeric characters using regex /\D/g
   const cleaned = simField.replace(/\D/g, '');
   
-  // Check if cleaned string is exactly 10 digits long
-  if (cleaned.length !== 10) return null;
+  // Handle 11/12 digit numbers (country codes) by extracting last 10 digits
+  if (cleaned.length < 10) return null;
+  const last10 = cleaned.slice(-10);
   
   // Return validated 10-digit string
-  return cleaned;
+  return last10;
 }
 
 // ── Paanel API Rate Limit Tracking ────────────────────────────────────────────
