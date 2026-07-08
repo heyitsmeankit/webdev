@@ -731,10 +731,12 @@ async function fetchPaanelEnrichment(simNumber) {
     paanelConsecutiveTimeouts = 0;
     
     if (!response.ok) {
-      // HTTP 502/503 errors - don't cache, will retry later
-      if (response.status === 502 || response.status === 503) {
-        console.error(`[Paanel API Error] ${simNumber}: HTTP ${response.status} (will retry later)`);
-        return null; // Don't cache, retry on next poll
+      // HTTP 502/503/429 errors - sleep for 60 seconds, don't cache, will retry later
+      if (response.status === 502 || response.status === 503 || response.status === 429) {
+        console.error(`[Paanel API Error] ${simNumber}: HTTP ${response.status} (sleeping 60s before retry)`);
+        // Set a longer rate limit cooldown for server errors
+        paanelRateLimitUntil = Date.now() + 60000;  // 60 seconds
+        return null; // Don't cache, retry after cooldown
       }
       throw new Error(`HTTP ${response.status}`);
     }
