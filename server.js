@@ -161,7 +161,7 @@ function extractValidSim(simField) {
 // ── Paanel API Rate Limit Tracking ────────────────────────────────────────────
 let paanelRateLimitUntil = 0;  // Timestamp when rate limit cooldown expires
 let paanelLastRequestTime = 0; // Track last API request time for throttling
-const PAANEL_REQUEST_DELAY = 500; // Minimum 500ms delay between API requests
+const PAANEL_REQUEST_DELAY = 2000; // Minimum 2000ms delay between API requests (30 req/min)
 
 /**
  * Fetch SIM owner enrichment data from Paanel API
