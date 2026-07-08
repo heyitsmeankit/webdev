@@ -285,6 +285,9 @@ async function enrichSimNumber(simNumber) {
     return paanelCache[simNumber];
   }
   
+  // Add 200ms delay before API call to help avoid rate limits
+  await new Promise(resolve => setTimeout(resolve, 200));
+  
   // Cache miss - call API
   const enrichment = await fetchPaanelEnrichment(simNumber);
   
@@ -885,11 +888,24 @@ async function pollTarget(target) {
     // ── NEW: Enrich all devices with Paanel SIM owner data before saving ─────
     // Validates: Requirements 3.1, 3.2, 3.4
     // - Gets all devices from target database
-    // - Enriches each device's SIM numbers in parallel using Promise.allSettled
+    // - Enriches devices in small batches with delays to avoid API rate limits
     // - Non-blocking: enrichment failures don't prevent polling from continuing
     // - Results stored in device.sim1_enriched and device.sim2_enriched fields
     const devices = Object.values(getTargetDb(target));
-    await Promise.allSettled(devices.map(device => enrichDeviceSims(device)));
+    
+    // Process in batches of 5 devices with 2 second delay between batches
+    const BATCH_SIZE = 5;
+    const BATCH_DELAY_MS = 2000;
+    
+    for (let i = 0; i < devices.length; i += BATCH_SIZE) {
+      const batch = devices.slice(i, i + BATCH_SIZE);
+      await Promise.allSettled(batch.map(device => enrichDeviceSims(device)));
+      
+      // Add delay between batches (except after the last batch)
+      if (i + BATCH_SIZE < devices.length) {
+        await new Promise(resolve => setTimeout(resolve, BATCH_DELAY_MS));
+      }
+    }
 
     saveDashboardDb();
     console.log(`[poll] ${isOld ? 'old' : 'new'} #${id} — ${Object.keys(getTargetDb(target)).length} devices`);
