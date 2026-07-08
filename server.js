@@ -163,6 +163,11 @@ let paanelRateLimitUntil = 0;  // Timestamp when rate limit cooldown expires
 let paanelLastRequestTime = 0; // Track last API request time for throttling
 const PAANEL_REQUEST_DELAY = 2000; // Minimum 2000ms delay between API requests (30 req/min)
 
+// Circuit breaker: stop all requests after consecutive failures
+let paanelConsecutiveTimeouts = 0;  // Track consecutive timeout failures
+let paanelDisabledUntilRestart = false;  // Circuit breaker flag
+const MAX_CONSECUTIVE_TIMEOUTS = 5;  // Stop after 5 consecutive timeouts
+
 /**
  * Fetch SIM owner enrichment data from Paanel API
  * @param {string} simNumber - Validated 10-digit SIM number
@@ -181,11 +186,16 @@ const PAANEL_REQUEST_DELAY = 2000; // Minimum 2000ms delay between API requests 
  * - Logs all errors with format: [Paanel API Error] {simNumber}: {errorMessage}
  */
 async function fetchPaanelEnrichment(simNumber) {
+  // Circuit breaker: stop all requests if disabled
+  if (paanelDisabledUntilRestart) {
+    return null; // Return null to indicate permanent failure (don't cache)
+  }
+
   // Check if we're in rate limit cooldown
   if (Date.now() < paanelRateLimitUntil) {
     const remainingSec = Math.ceil((paanelRateLimitUntil - Date.now()) / 1000);
     console.log(`[Paanel API] Rate limit active, skipping ${simNumber} (${remainingSec}s remaining)`);
-    return [];
+    return null; // Return null to skip caching (will retry later)
   }
 
   // Throttle requests: wait if last request was too recent
@@ -218,7 +228,15 @@ async function fetchPaanelEnrichment(simNumber) {
       signal: AbortSignal.timeout(10000) // 10 second timeout
     });
     
+    // Reset timeout counter on successful connection
+    paanelConsecutiveTimeouts = 0;
+    
     if (!response.ok) {
+      // HTTP 502/503 errors - don't cache, will retry later
+      if (response.status === 502 || response.status === 503) {
+        console.error(`[Paanel API Error] ${simNumber}: HTTP ${response.status} (will retry later)`);
+        return null; // Don't cache, retry on next poll
+      }
       throw new Error(`HTTP ${response.status}`);
     }
     
@@ -257,11 +275,25 @@ async function fetchPaanelEnrichment(simNumber) {
     console.warn(`[Paanel API] Rate limit detected for ${simNumber} - activating 45s cooldown`);
     console.warn(`[Paanel API] Response: ${JSON.stringify(data).substring(0, 200)}`);
     paanelRateLimitUntil = Date.now() + 45000;  // 45 second cooldown
-    return [];
+    return null; // Don't cache, will retry after cooldown
     
   } catch (error) {
+    // Check for timeout errors
+    if (error.message.includes('aborted') || error.message.includes('timeout')) {
+      paanelConsecutiveTimeouts++;
+      console.error(`[Paanel API Error] ${simNumber}: ${error.message} (timeout ${paanelConsecutiveTimeouts}/${MAX_CONSECUTIVE_TIMEOUTS})`);
+      
+      // Circuit breaker: disable after MAX_CONSECUTIVE_TIMEOUTS
+      if (paanelConsecutiveTimeouts >= MAX_CONSECUTIVE_TIMEOUTS) {
+        paanelDisabledUntilRestart = true;
+        console.error(`[Paanel API] DISABLED after ${MAX_CONSECUTIVE_TIMEOUTS} consecutive timeouts. Restart server to re-enable.`);
+      }
+      
+      return null; // Don't cache, will retry (unless disabled)
+    }
+    
     console.error(`[Paanel API Error] ${simNumber}:`, error.message);
-    return [];
+    return null; // Don't cache other errors, will retry
   }
 }
 
@@ -291,11 +323,14 @@ async function enrichSimNumber(simNumber) {
   // Cache miss - call API
   const enrichment = await fetchPaanelEnrichment(simNumber);
   
-  // Store in cache (even if empty)
-  paanelCache[simNumber] = enrichment;
-  savePaanelCache();
+  // Only cache if we got a valid response (not null)
+  // null means temporary failure (will retry later)
+  if (enrichment !== null) {
+    paanelCache[simNumber] = enrichment;
+    savePaanelCache();
+  }
   
-  return enrichment;
+  return enrichment || []; // Return empty array if null
 }
 
 /**
@@ -1115,6 +1150,18 @@ app.get('/api/pp/urls', (req, res) => {
   // Return all PP targets, including empty ones so they're visible
   const summaries = PP_TARGETS.map(t => summariseTarget(t));
   res.json(summaries);
+});
+
+// ── Paanel API Status ─────────────────────────────────────────────────────────
+app.get('/api/paanel/status', (req, res) => {
+  res.json({
+    disabled: paanelDisabledUntilRestart,
+    consecutiveTimeouts: paanelConsecutiveTimeouts,
+    maxTimeouts: MAX_CONSECUTIVE_TIMEOUTS,
+    rateLimitActive: Date.now() < paanelRateLimitUntil,
+    rateLimitRemainingSec: Math.max(0, Math.ceil((paanelRateLimitUntil - Date.now()) / 1000)),
+    cacheSize: Object.keys(paanelCache).length
+  });
 });
 
 app.get('/api/pp/url/:id', (req, res) => {

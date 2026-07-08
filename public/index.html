@@ -270,6 +270,19 @@
   #notif-toast.show { display:block; animation:toastIn .25s ease; }
   @keyframes toastIn { from { opacity:0; transform:translateX(-50%) translateY(12px); }
                        to   { opacity:1; transform:translateX(-50%) translateY(0); } }
+  
+  /* Paanel API Status Banner */
+  .paanel-banner {
+    background: linear-gradient(135deg, #ff6b6b 0%, #ff4757 100%);
+    color: white;
+    padding: 12px 20px;
+    text-align: center;
+    font-weight: 600;
+    font-size: 14px;
+    box-shadow: 0 2px 8px rgba(255, 71, 87, 0.3);
+    border-bottom: 2px solid rgba(0,0,0,0.1);
+  }
+  .paanel-banner.hidden { display: none; }
 </style>
 </head>
 <body>
@@ -297,6 +310,11 @@
     <button class="btn btn-ghost" id="refresh-btn" onclick="refreshUrlList()">↻ Refresh</button>
   </div>
 </header>
+
+<!-- Paanel API Status Banner -->
+<div id="paanel-disabled-banner" class="paanel-banner hidden">
+  ⚠️ Paanel SIM enrichment is currently disabled due to connection issues. Restart the server to re-enable.
+</div>
 
 <main>
   <!-- ── Homepage selector ── -->
@@ -1083,6 +1101,29 @@ async function refreshUrlList() {
   if (btn) { btn.textContent = '↻ Refresh'; btn.disabled = false; }
   await loadUrls();
 }
+
+// ── Paanel API Status Monitoring ──────────────────────────────────────────────
+async function checkPaanelStatus() {
+  try {
+    const res = await fetch('/api/paanel/status');
+    if (!res.ok) return;
+    const status = await res.json();
+    
+    const banner = document.getElementById('paanel-disabled-banner');
+    if (status.disabled) {
+      banner.classList.remove('hidden');
+    } else {
+      banner.classList.add('hidden');
+    }
+  } catch (error) {
+    console.error('Failed to check Paanel status:', error);
+  }
+}
+
+// Check Paanel status every 30 seconds
+setInterval(checkPaanelStatus, 30000);
+// Check immediately on page load
+checkPaanelStatus();
 
 // ── SearchNo Modal ────────────────────────────────────────────────────────────
 function closeSearchno() {
